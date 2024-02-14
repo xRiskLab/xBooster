@@ -1,0 +1,33 @@
+[tool.poetry]
+name = "xbooster"
+version = "0.1.0"
+description = "Explainable Boosted Scoring"
+authors = ["Denis Burakov <dennyemb@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.9,<3.11"
+black = {extras = ["jupyter"], version = "^24.2.0"}
+duckdb = "^0.9.2"
+ipykernel = "6.25.2"
+matplotlib = "^3.8.0"
+numpy = "1.26.0"
+pandas = "2.0.3"
+pylint = "^3.0.3"
+scipy = "^1.11.4"
+shap = "^0.44.0"
+xgboost = "^2.0.0"
+optbinning = "^0.19.0"
+pytest = "^8.0.0"
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.25.2"
+
+[tool.black]
+line-length = 100
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
