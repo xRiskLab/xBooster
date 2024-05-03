@@ -376,7 +376,7 @@ Contributions are welcome! For bug reports or feature requests, please open an i
 For code contributions, please open a pull request.
 
 ## Version
-Current version: 0.2.0
+Current version: 0.2.1
 
 ## Changelog
 
