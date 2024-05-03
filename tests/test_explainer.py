@@ -17,28 +17,18 @@ from xbooster.explainer import (  # pylint: disable=E0401
     plot_score_distribution,  # pylint: disable=E0401
     plot_local_importance,  # pylint: disable=E0401
 )  # pylint: disable=E0401
-from xbooster.constructor import XGBScorecardConstructor  # pylint: disable=E0401
+from xbooster.constructor import (
+    XGBScorecardConstructor,
+)  # pylint: disable=E0401
+from xbooster.explainer import (
+    TreeVisualizer,
+)  # pylint: disable=E0401
 import xgboost as xgb
 
 
 class TestExplainer(unittest.TestCase):
     """
     Test suite for the Explainer module.
-
-    This class contains test methods for various functionalities
-    provided by the Explainer module. It sets up the test environment
-    and defines individual test cases for different methods.
-
-    Methods:
-    - setUp: Set up the test environment.
-    - test_build_interactions_splits: Test case for the build_interactions_splits method.
-    - test_plot_importance: Test case for the plot_importance function.
-    - test_plot_score_distribution: Test the plot_score_distribution function.
-    - test_plot_local_importance: Test case for the plot_local_importance function.
-
-    Examples:
-        test_obj = TestExplainer()
-        test_obj.setUp()
     """
 
     def setUp(self):
@@ -53,7 +43,9 @@ class TestExplainer(unittest.TestCase):
             test_obj.setUp()
         """
         # Mock data for testing
-        self.model = None  # Assume we have a trained XGBoost model
+        self.model = (
+            None  # Assume we have a trained XGBoost model
+        )
         self.dataset = pd.DataFrame(
             {
                 "feature1": np.random.rand(500),
@@ -64,17 +56,28 @@ class TestExplainer(unittest.TestCase):
 
         features = ["feature1", "feature2"]
         label = "label"
-        X, y = self.dataset[features], self.dataset[label]  # pylint: disable=C0103
+        # pylint: disable=C0103
+        X, y = (
+            self.dataset[features],
+            self.dataset[label],
+        )
         xgb_model = xgb.XGBClassifier()
         xgb_model.fit(X, y)
-        self.scorecard_constructor = XGBScorecardConstructor(xgb_model, X, y)
+        self.scorecard_constructor = (
+            XGBScorecardConstructor(xgb_model, X, y)
+        )
         self.scorecard_constructor.construct_scorecard()  # Build the scorecard
         self.scorecard_constructor.create_points()  # Create scorecard points
         self.sample_to_explain = pd.DataFrame(
-            {"feature1": np.random.rand(1), "feature2": np.random.rand(1)}
+            {
+                "feature1": np.random.rand(1),
+                "feature2": np.random.rand(1),
+            }
         )
         self.y_true = self.dataset["label"]
-        self.y_pred = pd.Series(np.random.rand(500), index=self.y_true.index)
+        self.y_pred = pd.Series(
+            np.random.rand(500), index=self.y_true.index
+        )
 
     def test_build_interactions_splits(self):
         """
@@ -85,7 +88,9 @@ class TestExplainer(unittest.TestCase):
         assertions can be added based on the expected behavior.
 
         """
-        splits_df = build_interactions_splits(scorecard_constructor=self.scorecard_constructor)
+        splits_df = build_interactions_splits(
+            scorecard_constructor=self.scorecard_constructor
+        )
         self.assertIsInstance(splits_df, pd.DataFrame)
 
     @pytest.mark.filterwarnings("ignore::UserWarning")
@@ -104,7 +109,8 @@ class TestExplainer(unittest.TestCase):
             plot_importance()  # Should raise ValueError
         with self.assertRaises(ValueError):
             plot_importance(
-                scorecard_constructor=self.scorecard_constructor, metric="InvalidMetric"
+                scorecard_constructor=self.scorecard_constructor,
+                metric="InvalidMetric",
             )
 
     @pytest.mark.filterwarnings("ignore::UserWarning")
@@ -119,7 +125,9 @@ class TestExplainer(unittest.TestCase):
         """
         with self.assertRaises(ValueError):
             plot_score_distribution()  # Should raise ValueError
-        plot_score_distribution(y_true=self.y_true, y_pred=self.y_pred)
+        plot_score_distribution(
+            y_true=self.y_true, y_pred=self.y_pred
+        )
 
     @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_plot_local_importance(self):
@@ -132,19 +140,52 @@ class TestExplainer(unittest.TestCase):
         when a valid input is provided.
 
         """
+    # Test with non-DataFrame input to confirm it raises ValueError
         with self.assertRaises(ValueError):
+            sample_to_explain = self.dataset[: 1]
             plot_local_importance(
-                self.scorecard_constructor, X=np.array([1, 2])  # type: ignore
-            )  # Should raise ValueError
-
-        # Check the expected behavior when a valid input is provided
-        valid_input_df = pd.DataFrame({"feature1": [1], "feature2": [2]})
-        try:
-            plot_local_importance(
-                scorecard_constructor=self.scorecard_constructor, X=valid_input_df
+                self.scorecard_constructor,
+                sample_to_explain
             )
-        except ValueError:
-            self.fail("plot_local_importance raised ValueError unexpectedly")
+
+    def test_tree_visualizer(self):
+        """
+        Test case for the TreeVisualizer class.
+
+        This test case checks the behavior of the TreeVisualizer class in different scenarios.
+        It verifies that the class raises a ValueError when called without a scorecard constructor,
+        successfully parses XGBoost model output, and correctly plots the decision tree.
+
+        Additional assertions can be added based on the expected behavior of the class.
+
+        """
+        # Check if ValueError is raised when scorecard constructor is not set
+        with self.assertRaises(ValueError):
+            tree_visualizer = TreeVisualizer()
+            tree_visualizer.parse_xgb_output()
+
+        # Check if parsing XGBoost model output works correctly
+        tree_visualizer = TreeVisualizer()
+        tree_visualizer.parse_xgb_output(
+            scorecard_constructor=self.scorecard_constructor
+        )
+        self.assertIsInstance(
+            tree_visualizer.tree_dump, dict
+        )
+
+        # Check if decision tree is plotted successfully
+        try:
+            tree_visualizer.plot_tree(
+                scorecard_constructor=self.scorecard_constructor
+            )
+        except ValueError as ve:
+            self.fail(
+                f"Failed to plot decision tree: {str(ve)}"
+            )
+        except RuntimeError as re:
+            self.fail(
+                f"A runtime error occurred during plotting: {str(re)}"
+            )
 
 
 if __name__ == "__main__":

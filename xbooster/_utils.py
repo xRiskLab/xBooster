@@ -1,6 +1,6 @@
-"""
-Module: _utils.py
+# utils.py
 
+"""
 This module contains utility functions for calculating WOE and IV.
 Since these metrics are reused by different modules, I decided to create a separate module for them.
 Additionally, if one wants to adjust WOE calculation it will be easier to do within this module.
@@ -8,8 +8,114 @@ Additionally, if one wants to adjust WOE calculation it will be easier to do wit
 # TODO: Simplify function calls to remove redundancy.
 """
 
+from typing import List, Tuple
+
 import numpy as np
 import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import LabelBinarizer, OneHotEncoder
+
+
+class DataPreprocessor:
+    """
+    A class for preprocessing data which includes encoding categorical variables,
+    handling the target variable, and creating interaction constraints.
+
+    Attributes:
+        numerical_features (List[str]): List of names for numerical features.
+        categorical_features (List[str]): List of names for categorical features.
+        target (str): Name of the target feature.
+    """
+
+    def __init__(
+        self,
+        numerical_features: List[str],
+        categorical_features: List[str],
+        target: str,
+    ):
+        """
+        Initialize the DataPreprocessor with feature lists and target name.
+        """
+        self.numerical_features = numerical_features
+        self.categorical_features = categorical_features
+        self.target = target
+        self.ohe_transformer = ColumnTransformer(
+            transformers=[
+                ("onehot", OneHotEncoder(sparse_output=False), categorical_features),
+            ],
+            remainder="passthrough",
+            verbose_feature_names_out=False
+        )
+        self.label_binarizer = LabelBinarizer()
+
+    def fit(self, dataset: pd.DataFrame) -> None:
+        """
+        Fit the preprocessing transformers on the dataset.
+        """
+        self._check_features(dataset)
+        self._validate_target(dataset)
+        self.ohe_transformer.fit(
+            dataset[self.numerical_features + self.categorical_features]
+        )
+        self.label_binarizer.fit(dataset[self.target])
+
+    def transform(
+        self, dataset: pd.DataFrame
+    ) -> Tuple[pd.DataFrame, pd.Series]:
+        """
+        Apply transformations to the dataset.
+        """
+        # pylint: disable=C0103
+        X_transformed = self.ohe_transformer.transform(
+            dataset[self.numerical_features + self.categorical_features]
+        )
+        new_columns = self.ohe_transformer.get_feature_names_out()
+        X = pd.DataFrame(X_transformed, columns=new_columns) # pylint: disable=C0103
+        y = pd.Series(
+            self.label_binarizer.transform(dataset[self.target]).ravel(),
+            name=self.target,
+        )
+        return X, y
+
+    def fit_transform(
+        self, dataset: pd.DataFrame
+    ) -> Tuple[pd.DataFrame, pd.Series]:
+        """
+        Fit and transform the dataset.
+        """
+        self.fit(dataset)
+        return self.transform(dataset)
+
+    def generate_interaction_constraints(self, features):
+        """
+        Generate interaction constraints based on the features of the dataset.
+        """
+        interaction_constraints = {}
+        for feature in features:
+            base_feature = feature.rsplit("_", 1)[0]
+            if base_feature not in interaction_constraints:
+                interaction_constraints[base_feature] = []
+            interaction_constraints[base_feature].append(feature)
+
+        return list(interaction_constraints.values())
+
+    def _check_features(self, dataset: pd.DataFrame):
+        """
+        Check if all required features are in the dataset.
+        """
+        if missing_features := set(
+            self.numerical_features + self.categorical_features + [self.target]
+        ) - set(dataset.columns):
+            raise ValueError(
+                f"Missing features in the dataset: {missing_features}"
+            )
+
+    def _validate_target(self, dataset: pd.DataFrame):
+        """
+        Validate that the target variable is binary.
+        """
+        if dataset[self.target].nunique() > 2:
+            raise ValueError("Target variable must be binary.")
 
 
 def calculate_odds(p: float) -> float:
@@ -27,7 +133,9 @@ def calculate_odds(p: float) -> float:
     return p / (1 - p)
 
 
-def calculate_weight_of_evidence(xgb_scorecard: pd.DataFrame, interactions=False) -> pd.DataFrame:
+def calculate_weight_of_evidence(
+    xgb_scorecard: pd.DataFrame, interactions=False
+) -> pd.DataFrame:
     """
     Calculate the Weight-of-Evidence (WOE) score for each group in the XGBoost scorecard.
     Here we flip the traditional WOE formula (negative log-likelihood) and focus on the
@@ -70,14 +178,15 @@ def calculate_weight_of_evidence(xgb_scorecard: pd.DataFrame, interactions=False
 
     woe_table = xgb_scorecard.copy()
 
-    # woe_table["CumNonEvents"] = len(constructor.y) - np.sum(constructor.y)
-    # woe_table["CumEvents"] = np.sum(constructor.y)
-
     if interactions is False:
         if "CumNonEvents" not in woe_table.columns:
-            woe_table["CumNonEvents"] = woe_table.groupby("Tree")["NonEvents"].transform("sum")
+            woe_table["CumNonEvents"] = woe_table.groupby("Tree")[
+                "NonEvents"
+            ].transform("sum")
         if "CumEvents" not in woe_table.columns:
-            woe_table["CumEvents"] = woe_table.groupby("Tree")["Events"].transform("sum")
+            woe_table["CumEvents"] = woe_table.groupby("Tree")[
+                "Events"
+            ].transform("sum")
     # Calculate Weight-of-Evidence (WOE), Good's formula from Bayes factor
     woe_table["WOE"] = np.log(
         np.where(
@@ -135,3 +244,103 @@ def calculate_likelihood(xgb_scorecard: pd.DataFrame) -> pd.Series:
     woe_table["Likelihood"] = np.exp(woe_table["WOE"])
 
     return pd.Series(woe_table["Likelihood"].astype(float), name="Likelihood")
+
+# pylint: disable=R0914
+def convert_to_sql(
+    xgb_scorecard: pd.DataFrame, my_table: str
+) -> str:  # pylint: disable=R0914
+    """Converts a scorecard into an SQL format.
+
+    This function allows to do ad-hoc predictions via SQL.
+
+    Args:
+        xgb_scorecard (pd.DataFrame): The scorecard table with tree structure and points.
+        my_table (str): The name of the input table to be used in SQL.
+
+    Returns:
+        str: The final SQL query for deploying the scorecard.
+
+    """
+    sql_queries = []
+
+    scorecard_table = xgb_scorecard.copy()
+
+    # Iterate over unique trees
+    for tree_id in scorecard_table["Tree"].unique():
+        tree_df = scorecard_table[scorecard_table["Tree"] == tree_id]
+
+        # Generate case query for the tree
+        case_query = ""
+
+        # Iterate over rows in the tree
+        for _, row in tree_df.iterrows():
+            detailed_split = row["DetailedSplit"]
+            points = row["Points"]
+
+            # Split detailed split into individual conditions
+            conditions = detailed_split.split(", ")
+            case_conditions = []
+
+            # Convert each condition to SQL syntax and append to
+            # case_conditions
+            for condition in conditions:
+                condition_sql = (
+                    condition.replace("or", "OR")
+                    .replace("and", "AND")
+                    .replace("missing", "IS NULL")
+                    .replace(
+                        " IS NULL", f" {condition.split()[0]} IS NULL"
+                    )  # Add feature before IS NULL
+                )
+                case_conditions.append(f"({condition_sql})")
+
+            # Combine all conditions with 'AND' and append to case_conditions
+            combined_conditions = " \n          AND ".join(case_conditions)
+
+            # Append case when statement with proper indentation
+            case_query += (
+                f"\n          WHEN ({combined_conditions}) \n     THEN {points}"
+            )
+
+        # Add the case query for the tree to the list
+        sql_queries.append(case_query)
+
+    case_statements = [
+        f"CASE {q.strip()}\n     END AS cte_tree_{tree_id}"
+        for tree_id, q in enumerate(sql_queries)
+    ]
+
+    # Combine the list of CASE statements into a single string with newline
+    # characters
+    case_statements_str = ",\n".join(case_statements)
+
+    # Construct the final SQL query with the CASE statements and other parts
+    cte_with_scores = (
+        "WITH scorecard AS\n"
+        "(\n"
+        "    SELECT *,\n"
+        f"    {case_statements_str}\n"
+        f"    FROM {my_table}\n"
+        ")\n"
+    )
+
+    # Create the part before the 'SELECT' statement
+    final_query = f"{cte_with_scores}\n"
+
+    # Create the 'SELECT' statement with proper indentation
+    final_query += "SELECT *,\n"
+    final_query += (
+        "    "
+        + " + \n    ".join(
+            [
+                f"cte_tree_{tree_id}"
+                for tree_id in scorecard_table["Tree"].unique()
+            ]
+        )
+        + "\nAS score\n"
+    )
+
+    # Add the 'FROM' clause
+    final_query += "FROM scorecard"
+
+    return final_query
