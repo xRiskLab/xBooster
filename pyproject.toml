@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "xbooster"
-version = "0.2.0"
+version = "0.2.1"
 description = "Explainable Boosted Scoring"
 authors = ["Denis Burakov <dennyemb@gmail.com>"]
 license = "MIT"
