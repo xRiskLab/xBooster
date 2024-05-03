@@ -388,5 +388,8 @@ Current version: 0.2.0
 - Updated the local explanation algorithm for models with a depth > 1 (`explainer.py`)
 - Added a categorical preprocessor (`_utils.py`)
 
+### [0.2.1] - 2024-05-03
+- Updated dependencies
+
 # License 📄
 This project is licensed under the MIT License - see the LICENSE file for details.
