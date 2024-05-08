@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "xbooster"
-version = "0.2.3"
+version = "0.2.2"
 description = "Explainable Boosted Scoring"
 authors = ["xRiskLab <contact@xrisklab.ai>"]
 license = "MIT"
