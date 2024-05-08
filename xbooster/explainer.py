@@ -301,6 +301,8 @@ def plot_importance(
     dataframe: Optional[pd.DataFrame] = None,
     fontfamily: Optional[str] = "Monospace",
     fontsize: Optional[int] = 12,
+    dpi: Optional[int] = 100,
+    title: Optional[str] = "Feature importance",
     **kwargs: Any,
 ) -> None:
     """
@@ -314,6 +316,8 @@ def plot_importance(
         dataframe: The dataframe containing features and labels.
         fontfamily: Font family for text elements like xlabel, title, etc.
         fontsize: Font size for text elements like xlabel, title, etc.
+        dpi: Dots per inch for the plot.
+        title: The title of the plot.
         **kwargs: Additional Matplotlib parameters.
 
     Returns:
@@ -430,14 +434,14 @@ def plot_importance(
     with plt.rc_context(
         {"font.family": fontfamily, "font.size": fontsize}
     ):
-        _, ax = plt.subplots(figsize=(5, 5), dpi=100)
+        _, ax = plt.subplots(dpi=dpi, **kwargs)
         importance_data.plot(
             kind="barh",
             width=0.75,
             ax=ax,
             fontsize=12,
             color=color,
-            **kwargs,
+            **kwargs
         )  # type: ignore
 
         ax.set_ylabel(None)
@@ -453,7 +457,9 @@ def plot_importance(
         ax.yaxis.set_ticks_position("none")
         ax.spines["right"].set_visible(False)
         ax.spines["top"].set_visible(False)
-
+        
+        if title:
+            plt.title(f"{title}")
         plt.show()
 
 
@@ -555,13 +561,14 @@ def plot_score_distribution(
         plt.legend()
         plt.show()
 
-
 # pylint: disable=too-many-statements, too-many-locals
 def plot_local_importance(
     scorecard_constructor,
     X: pd.DataFrame,  # pylint: disable=C0103
     fontfamily: Optional[str] = "Monospace",
     fontsize: Optional[int] = 12,
+    boxstyle: Optional[str] = "round, pad=-0.001,rounding_size=0.01",
+    title: Optional[str] = "Local feature importance",
     **kwargs: Any,
 ) -> None:
     # sourcery skip: extract-method
@@ -585,6 +592,8 @@ def plot_local_importance(
         scorecard_constructor: The scorecard constructor object.
         X: A single row (or rows) of the dataset to explain.
         fontsize: Font size for text elements like xlabel, title, etc.
+        boxstyle: The style of the rounding box.
+        title: The title of the plot.
         **kwargs: Additional parameters to pass to the matplotlib function.
 
     Returns:
@@ -726,7 +735,7 @@ def plot_local_importance(
                 (bb.xmin, bb.ymin),
                 abs(bb.width),
                 abs(bb.height),
-                boxstyle="round, pad=-0.001,rounding_size=0.01",
+                boxstyle=f"{boxstyle}",
                 ec="black",
                 linewidth=0.5,
                 fc=color,
@@ -757,7 +766,7 @@ def plot_local_importance(
         )
         plt.gca().spines["top"].set_visible(False)
         plt.gca().spines["right"].set_visible(False)
-        plt.title("Local explanation")
+        plt.title(f"{title}")
         plt.xlabel("mean(WOE)")
         plt.grid(axis="y", linestyle="--", alpha=0.5)
         plt.xticks(rotation=45)
@@ -777,7 +786,7 @@ class TreeVisualizer:
     def __init__(
         self,
         metrics: Optional[List[str]] = None,
-        precision: int = None,
+        precision: int = None, # type: ignore
     ):
         self.scorecard_constructor: Optional[
             XGBScorecardConstructor
