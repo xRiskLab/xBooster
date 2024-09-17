@@ -711,6 +711,51 @@ class XGBScorecardConstructor:  # pylint: disable=R0902
 
         return self.xgb_scorecard_intv
     
+    def create_points_peo_pdo(
+            self, 
+            peo: int, 
+            pdo: int, 
+            precision_points: int = 0,
+            scorecard: pd.DataFrame=None
+            ) -> pd.DataFrame:
+        """
+        create_points_peo_pdo
+
+        Creates a column with points ('Points_PEO_PDO') on a scorecard by intervals
+
+        Parameters
+        ----------
+        pdo : int
+            The points to double the odds
+        peo: int
+            Points at even odds
+        
+        scorecard: pd.DataFrame, optional
+            An external scorecard to use for creating points, by default None.
+            This option allow to build points on an external scorecard, for example,
+            when we calculate the points for all splits leading to a leaf node.
+        
+        Returns:
+        pd.DataFrame: The constructed scorecard grouped by interval with the new column Points_PEO_PDO
+        """
+        if scorecard is None:
+            scorecard = self.xgb_scorecard_intv.copy()
+        n_feats = len(scorecard["Feature"].unique())
+
+        # Adjust XAddEvidence, obtain Logit Contribution = BS/n_feats + Logit Contrib
+        scorecard["LogitContrib"] = scorecard["XAddEvidence"] + logit(self.base_score)/n_feats
+
+        # Transform logit contribution into points
+        factor = -pdo / np.log(2)
+        offset = peo
+        scorecard["Points_PEO_PDO"] = offset/n_feats + factor*scorecard["LogitContrib"]
+        scorecard["Points_PEO_PDO"] = scorecard["Points_PEO_PDO"].round(precision_points)
+
+        # Drop logit contribution column
+        scorecard.drop(columns="LogitContrib", inplace=True)
+
+        return scorecard
+    
     def _convert_tree_to_points(self, X):  # pylint: disable=C0103
         """
         Converts the leaf indices of the input data to corresponding points based on
