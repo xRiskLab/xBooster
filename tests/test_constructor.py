@@ -34,13 +34,7 @@ from xbooster.constructor import XGBScorecardConstructor  # pylint: disable=E040
 
 
 @pytest.fixture(scope="module")
-def xgb_model():
-    """
-    Creates and trains an XGBoost model.
-
-    Returns:
-        model (xgb.XGBClassifier): Trained XGBoost model.
-    """
+def data():
     X = pd.DataFrame(  # pylint: disable=C0103
         {
             "feature1": [
@@ -90,13 +84,25 @@ def xgb_model():
         }
     )
     y = pd.Series([1, 0, 1, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0])
+    return (X, y)
+
+
+@pytest.fixture(scope="module")
+def xgb_model(data):
+    """
+    Creates and trains an XGBoost model.
+
+    Returns:
+        model (xgb.XGBClassifier): Trained XGBoost model.
+    """
+    X, y = data
     model = xgb.XGBClassifier()
     model.fit(X, y)
     return model
 
 
 @pytest.fixture(scope="module")
-def scorecard_constructor(xgb_model):  # pylint: disable=W0621
+def scorecard_constructor(data, xgb_model):  # pylint: disable=W0621
     """
     Constructs an XGBScorecardConstructor object using the given XGBoost model,
     feature matrix (X), and target variable (y).
@@ -107,56 +113,26 @@ def scorecard_constructor(xgb_model):  # pylint: disable=W0621
     Returns:
     - XGBScorecardConstructor: The initialized XGBScorecardConstructor object.
     """
-    X = pd.DataFrame(  # pylint: disable=C0103
-        {
-            "feature1": [
-                37,
-                61,
-                51,
-                92,
-                49,
-                35,
-                7,
-                8,
-                58,
-                27,
-                38,
-                15,
-                66,
-                11,
-                20,
-                21,
-                40,
-                25,
-                95,
-                3,
-            ],
-            "feature2": [
-                26,
-                76,
-                27,
-                90,
-                4,
-                46,
-                27,
-                23,
-                49,
-                57,
-                49,
-                5,
-                6,
-                48,
-                92,
-                81,
-                52,
-                56,
-                86,
-                46,
-            ],
-        }
-    )
-    y = pd.Series([1, 0, 1, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0])
+    X, y = data
     return XGBScorecardConstructor(xgb_model, X, y)
+
+
+@pytest.fixture(scope="module")
+def scorecard_constructor_depth_one(data):  # pylint: disable=W0621
+    """
+    Constructs an XGBScorecardConstructor object using the given XGBoost model with booster constrained to depth one,
+    feature matrix (X), and target variable (y).
+
+    Parameters:
+    - data: tuple (X, y) to fit the XGBoost model.
+
+    Returns:
+    - XGBScorecardConstructor: The initialized XGBScorecardConstructor object.
+    """
+    X, y = data
+    xgb_model_depth_one = xgb.XGBClassifier(max_depth=1)
+    xgb_model_depth_one.fit(X, y)
+    return XGBScorecardConstructor(xgb_model_depth_one, X, y)
 
 
 @pytest.fixture(scope="module")
@@ -307,6 +283,52 @@ def test_create_points(scorecard_constructor):  # pylint: disable=W0621
     xgb_scorecard_with_points = scorecard_constructor.create_points()
     assert isinstance(xgb_scorecard_with_points, pd.DataFrame)
     assert not xgb_scorecard_with_points.empty
+
+
+def test_construct_scorecard_by_intervals(scorecard_constructor_depth_one):
+    """
+    Test case for the construct_scorecard_by_intervals method of XGBScorecardConstructor.
+
+    This test verifies that a non-empty scorecard by intervals is computed, and that calculated points from this scorecard match those computed using the original scorecard for non-extreme, extreme and missing observations.
+
+    Args:
+        scorecard_constructor (XGBScorecardConstructor): An instance of XGBScorecardConstructor.
+
+    Returns:
+        None
+    """
+    # Must first construct scorecard and calculate points
+    scorecard_constructor_depth_one.construct_scorecard()
+    scorecard_constructor_depth_one.create_points()
+    scorecard_intv = scorecard_constructor_depth_one.construct_scorecard_by_intervals()
+    scorecard_feat1 = scorecard_intv.loc[scorecard_intv.Feature == "feature1"]
+    scorecard_feat2 = scorecard_intv.loc[scorecard_intv.Feature == "feature2"]
+
+    # Assertion for definition of xgb_scorecard_intv
+    assert isinstance(
+        scorecard_constructor_depth_one.xgb_scorecard_intv, pd.DataFrame
+        )
+    assert not scorecard_constructor_depth_one.xgb_scorecard_intv.empty
+
+    # Assertion for points computed (non-missing)
+    # include non-extreme and extreme-values
+    set_obs = [[35., 48.5], [10., 56.], [51., 85.], [10., 85.]]
+    for obs in set_obs:
+        X_obs = pd.DataFrame([obs], columns=["feature1", "feature2"])
+        assert scorecard_constructor_depth_one._convert_tree_to_points(X_obs)["Score"].iloc[0] == (
+            (scorecard_feat1.loc[(obs[0] >= scorecard_feat1.Left) & (obs[0] < scorecard_feat1.Right), "Points"].sum())
+            + (scorecard_feat2.loc[(obs[1] >= scorecard_feat2.Left) & (obs[1] < scorecard_feat2.Right), "Points"].sum())
+        )
+    # check for points computed for missing
+    X_obs = pd.DataFrame([[None, None]], columns=["feature1", "feature2"], dtype=float)
+    assert scorecard_constructor_depth_one._convert_tree_to_points(X_obs)["Score"].iloc[0] == (
+            (scorecard_feat1.loc[scorecard_feat1.Bin.str.contains("Missing"), "Points"].sum())
+            + (scorecard_feat2.loc[scorecard_feat2.Bin.str.contains("Missing"), "Points"].sum())
+        )
+
+    
+
+    
 
 
 def test_predict_score(scorecard_constructor, X_test):  # pylint: disable=W0621, C0103
