@@ -134,7 +134,7 @@ def calculate_odds(p: float) -> float:
 
 
 def calculate_weight_of_evidence(
-    xgb_scorecard: pd.DataFrame, interactions=False
+    xgb_scorecard: pd.DataFrame, interactions=False, by_tree=True
 ) -> pd.DataFrame:
     """
     Calculate the Weight-of-Evidence (WOE) score for each group in the XGBoost scorecard.
@@ -169,6 +169,7 @@ def calculate_weight_of_evidence(
     Parameters:
     xgb_scorecard (DataFrame): The XGBoost scorecard containing the necessary columns.
     interactions (bool):
+    by_tree (bool, optional): Whether to calculate WOE for trees or else, for features.
 
     Returns:
     DataFrame: The XGBoost scorecard with added WOE scores.
@@ -179,12 +180,13 @@ def calculate_weight_of_evidence(
     woe_table = xgb_scorecard.copy()
 
     if interactions is False:
+        group_feat = "Tree" if by_tree else "Feature"
         if "CumNonEvents" not in woe_table.columns:
-            woe_table["CumNonEvents"] = woe_table.groupby("Tree")[
+            woe_table["CumNonEvents"] = woe_table.groupby(group_feat)[
                 "NonEvents"
             ].transform("sum")
         if "CumEvents" not in woe_table.columns:
-            woe_table["CumEvents"] = woe_table.groupby("Tree")[
+            woe_table["CumEvents"] = woe_table.groupby(group_feat)[
                 "Events"
             ].transform("sum")
     # Calculate Weight-of-Evidence (WOE), Good's formula from Bayes factor
@@ -202,7 +204,7 @@ def calculate_weight_of_evidence(
     return woe_table
 
 
-def calculate_information_value(xgb_scorecard: pd.DataFrame) -> pd.DataFrame:
+def calculate_information_value(xgb_scorecard: pd.DataFrame, by_tree=True) -> pd.DataFrame:
     """
     Calculate the Information Value (IV) for each group in the XGBoost scorecard.
     Calculated using the formula: IV = ∑ WOE * (Events / CumEvents - NonEvents / CumNonEvents).
@@ -214,6 +216,8 @@ def calculate_information_value(xgb_scorecard: pd.DataFrame) -> pd.DataFrame:
 
     Parameters:
     woe_table (DataFrame): The table containing the Weight-of-Evidence (WOE) scores.
+    by_tree (bool, optional): Whether to calculate WOE for trees or else, for features.
+
 
     Returns:
     pd.DataFrame: A table with vertically stacked WOE and IV columns.
@@ -221,7 +225,7 @@ def calculate_information_value(xgb_scorecard: pd.DataFrame) -> pd.DataFrame:
     if xgb_scorecard is None:  # raise and error
         raise ValueError("xgb_scorecard must be provided")
 
-    woe_table = calculate_weight_of_evidence(xgb_scorecard)
+    woe_table = calculate_weight_of_evidence(xgb_scorecard, by_tree=by_tree)
     woe_table["IV"] = woe_table["WOE"] * (
         woe_table["Events"] / woe_table["CumEvents"]
         - woe_table["NonEvents"] / woe_table["CumNonEvents"]
