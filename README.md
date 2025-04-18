@@ -1,10 +1,9 @@
 # xbooster 🚀
 
-A scorecard-format classificatory framework for logistic regression with XGBoost.
-xbooster allows to convert an XGB logistic regression into a logarithmic (point) scoring system.
+A scorecard-format famework for logistic regression tasks with gradient-boosted decision trees (XGBoost and CatBoost).
+xbooster allows to convert a classification model into a logarithmic (point) scoring system.
 
-In addition, it provides a suite of interpretability tools to understand the model's behavior,
-which can be instrumental for model testing and expert validation.
+In addition, it provides a suite of interpretability tools to understand the model's behavior.
 
 The interpretability suite includes:
 
@@ -23,6 +22,9 @@ pip install xbooster
 ```
 
 ## Usage 📝
+
+### XGBoost Usage
+
 Here's a quick example of how to use xbooster to construct a scorecard for an XGBoost model:
 
 ```python
@@ -140,9 +142,190 @@ sql_query = scorecard_constructor.generate_sql_query(table_name='my_table')
 print(sql_query)
 ```
 
-# Parameters 🛠
+### XGBoost Preprocessing
 
-## `xbooster.constructor` - XGBoost Scorecard Constructor
+For handling categorical features in XGBoost, you can use the `DataPreprocessor`:
+
+```python
+from xbooster._utils import DataPreprocessor
+
+# Define features and target
+numerical_features = [
+    "ApplicantIncome",
+    "CoapplicantIncome",
+    "LoanAmount",
+    "Loan_Amount_Term",
+    "Credit_History",
+]
+categorical_features = [
+    "Married",
+    "Dependents",
+    "Education",
+    "Self_Employed",
+    "Property_Area",
+]
+target = "Loan_Status"
+
+# Initialize preprocessor
+preprocessor = DataPreprocessor(
+    numerical_features, 
+    categorical_features, 
+    target
+)
+
+# Preprocess data
+X, y = preprocessor.fit_transform(dataset)
+
+# Get one-hot encoded feature names
+features_ohe = [
+    col for col in X.columns 
+    if col not in numerical_features
+]
+
+# Generate interaction constraints for XGBoost
+interaction_constraints = preprocessor.generate_interaction_constraints(features_ohe)
+```
+
+The `DataPreprocessor` provides:
+1. Automatic one-hot encoding of categorical features
+2. Proper handling of missing values
+3. Generation of interaction constraints for XGBoost
+4. Consistent feature naming for scorecard generation
+
+### CatBoost Support 🐱 (Beta)
+
+xbooster provides experimental support for CatBoost models with reduced functionality compared to XGBoost. Here's how to use it:
+
+```python
+import pandas as pd
+from catboost import CatBoostClassifier, Pool
+from xbooster.cb_constructor import CatBoostScorecardConstructor
+
+# Load data and prepare features
+data_path = "examples/data/test_data_01d9ab8b.csv"
+credit_data = pd.read_csv(data_path)
+num_features = ["Gross_Annual_Income", "Application_Score", "Bureau_Score"]
+categorical_features = ["Time_with_Bank"]
+features = num_features + categorical_features
+
+# Prepare X and y
+X = credit_data[features]
+y = credit_data["Final_Decision"].replace({"Accept": 1, "Decline": 0})
+
+# Create CatBoost Pool
+pool = Pool(
+    data=X,
+    label=y,
+    cat_features=categorical_features,
+)
+
+# Initialize and train CatBoost model
+model = CatBoostClassifier(
+    iterations=100,
+    allow_writing_files=False,
+    depth=1,
+    learning_rate=0.1,
+    verbose=0,
+    one_hot_max_size=9999,  # Key for interpretability
+)
+model.fit(pool)
+
+# Create and fit the scorecard constructor
+constructor = CatBoostScorecardConstructor(model, pool)
+
+# Construct the scorecard
+scorecard = constructor.construct_scorecard()
+print("\nScorecard:")
+print(scorecard.head(3))
+
+# Print raw leaf values
+print("\nRaw Leaf Values:")
+print(scorecard[["Tree", "LeafIndex", "LeafValue", "WOE"]].head(10))
+
+# Make predictions using different methods
+raw_scores = constructor.predict_score(X, method="raw")
+woe_scores = constructor.predict_score(X, method="woe")
+points_scores = constructor.predict_score(X, method="pdo")
+
+# Calculate Gini scores
+from sklearn.metrics import roc_auc_score
+
+raw_gini = 2 * roc_auc_score(y, raw_scores) - 1
+woe_gini = 2 * roc_auc_score(y, woe_scores) - 1
+points_gini = 2 * roc_auc_score(y, points_scores) - 1
+
+print("\nGini Coefficients:")
+print(f"Raw Scores: {raw_gini:.4f}")
+print(f"WOE Scores: {woe_gini:.4f}")
+print(f"Points Scores: {points_gini:.4f}")
+
+# Get feature importance
+feature_importance = constructor.get_feature_importance()
+print("\nFeature Importance:")
+for feature, importance in feature_importance.items():
+    print(f"{feature}: {importance:.4f}")
+
+# Visualize a tree
+from xbooster._utils import CatBoostTreeVisualizer
+
+visualizer = CatBoostTreeVisualizer(scorecard)
+visualizer.plot_tree(tree_idx=0, title="CatBoost Tree Visualization")
+```
+
+### Limitations of CatBoost Support
+
+The CatBoost implementation has some limitations compared to the XGBoost version:
+
+1. Only supports depth=1 trees for interpretability
+2. Limited support for categorical features
+3. No SQL query generation
+4. Reduced visualization options
+5. No support for local feature importance
+6. No support for score distribution plots
+
+### CatBoost Preprocessing
+
+For high-cardinality categorical features, you can use the `CatBoostPreprocessor`:
+
+```python
+from xbooster._utils import CatBoostPreprocessor
+
+# Initialize preprocessor
+preprocessor = CatBoostPreprocessor(max_categories=10)  # or top_p=0.9
+
+# Fit and transform the data
+X_processed = preprocessor.fit_transform(X, cat_features=categorical_features)
+
+# Get the mapping of categories
+category_maps = preprocessor.get_mapping()
+```
+
+### CatBoost Tree Visualization
+
+The `CatBoostTreeVisualizer` class provides basic tree visualization with customizable settings:
+
+```python
+from xbooster._utils import CatBoostTreeVisualizer
+
+# Initialize visualizer with custom configuration
+plot_config = {
+    "font_size": 12,
+    "figsize": (12, 8),
+    "level_distance": 8.0,
+    "sibling_distance": 8.0,
+    "fontfamily": "monospace",
+    "yes_color": "#1f77b4",
+    "no_color": "#ff7f0e",
+    "leaf_color": "#2ca02c",
+}
+
+visualizer = CatBoostTreeVisualizer(scorecard, plot_config)
+visualizer.plot_tree(tree_idx=0, title="Customized Tree Visualization")
+```
+
+## Parameters 🛠
+
+### `xbooster.constructor` - XGBoost Scorecard Constructor
 
 ### Description
 
@@ -195,7 +378,7 @@ A class for generating a scorecard from a trained XGBoost model. The methodology
    - **Returns**:
      - `str`: The final SQL query for deploying the scorecard.
 
-## `xbooster.explainer` - XGBoost Scorecard Explainer
+### `xbooster.explainer` - XGBoost Scorecard Explainer
 
 This module provides functionalities for explaining XGBoost scorecards, including methods to extract split information, build interaction splits, visualize tree structures, plot feature importances, and more.
 
@@ -269,29 +452,33 @@ This module provides functionalities for explaining XGBoost scorecards, includin
      - `show_info` (bool): Whether to show additional information (default: True).
      - `**kwargs` (Any): Additional Matplotlib parameters.
 
-# Contributing 🤝
+## Contributing 🤝
 Contributions are welcome! For bug reports or feature requests, please open an issue.
 
 For code contributions, please open a pull request.
 
 ## Version
-Current version: 0.2.2
+Current version: 0.2.3
 
 ## Changelog
 
-### [0.1.0] - 2024-02-14
-- Initial release
+### [0.2.3] - 2025-04-18
+- Added support for CatBoost classificationmodels and switch to `uv` for packaging.
+- Python version requirement updated to 3.10-3.11.
+
+### [0.2.2] - 2024-05-08
+- Updates in `explainer.py` module to improve kwargs handling and minor changes.
+
+### [0.2.1] - 2024-05-03
+- Updates of dependencies
 
 ### [0.2.0] - 2024-05-03
 - Added tree visualization class (`explainer.py`)
 - Updated the local explanation algorithm for models with a depth > 1 (`explainer.py`)
 - Added a categorical preprocessor (`_utils.py`)
 
-### [0.2.1] - 2024-05-03
-- Updates of dependencies
+### [0.1.0] - 2024-02-14
+- Initial release
 
-### [0.2.2] - 2024-05-08
-- Updates in `explainer.py` module to improve kwargs handling and minor changes.
-
-# License 📄
+## License 📄
 This project is licensed under the MIT License - see the LICENSE file for details.

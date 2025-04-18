@@ -4,14 +4,14 @@
 This module contains utility functions for calculating WOE and IV.
 Since these metrics are reused by different modules, I decided to create a separate module for them.
 Additionally, if one wants to adjust WOE calculation it will be easier to do within this module.
-
-# TODO: Simplify function calls to remove redundancy.
 """
 
-from typing import List, Tuple
+from typing import Any, Dict, List, Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import LabelBinarizer, OneHotEncoder
 
@@ -44,7 +44,7 @@ class DataPreprocessor:
                 ("onehot", OneHotEncoder(sparse_output=False), categorical_features),
             ],
             remainder="passthrough",
-            verbose_feature_names_out=False
+            verbose_feature_names_out=False,
         )
         self.label_binarizer = LabelBinarizer()
 
@@ -54,14 +54,10 @@ class DataPreprocessor:
         """
         self._check_features(dataset)
         self._validate_target(dataset)
-        self.ohe_transformer.fit(
-            dataset[self.numerical_features + self.categorical_features]
-        )
+        self.ohe_transformer.fit(dataset[self.numerical_features + self.categorical_features])
         self.label_binarizer.fit(dataset[self.target])
 
-    def transform(
-        self, dataset: pd.DataFrame
-    ) -> Tuple[pd.DataFrame, pd.Series]:
+    def transform(self, dataset: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
         """
         Apply transformations to the dataset.
         """
@@ -70,16 +66,16 @@ class DataPreprocessor:
             dataset[self.numerical_features + self.categorical_features]
         )
         new_columns = self.ohe_transformer.get_feature_names_out()
-        X = pd.DataFrame(X_transformed, columns=new_columns) # pylint: disable=C0103
+        # Type ignore because scikit-learn's transform returns Union[np.ndarray, spmatrix]
+        X = pd.DataFrame(X_transformed, columns=new_columns)  # type: ignore
         y = pd.Series(
-            self.label_binarizer.transform(dataset[self.target]).ravel(),
+            # Type ignore because LabelBinarizer.transform returns Union[np.ndarray, spmatrix]
+            self.label_binarizer.transform(dataset[self.target]).ravel(),  # type: ignore
             name=self.target,
         )
         return X, y
 
-    def fit_transform(
-        self, dataset: pd.DataFrame
-    ) -> Tuple[pd.DataFrame, pd.Series]:
+    def fit_transform(self, dataset: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
         """
         Fit and transform the dataset.
         """
@@ -106,9 +102,7 @@ class DataPreprocessor:
         if missing_features := set(
             self.numerical_features + self.categorical_features + [self.target]
         ) - set(dataset.columns):
-            raise ValueError(
-                f"Missing features in the dataset: {missing_features}"
-            )
+            raise ValueError(f"Missing features in the dataset: {missing_features}")
 
     def _validate_target(self, dataset: pd.DataFrame):
         """
@@ -133,9 +127,7 @@ def calculate_odds(p: float) -> float:
     return p / (1 - p)
 
 
-def calculate_weight_of_evidence(
-    xgb_scorecard: pd.DataFrame, interactions=False
-) -> pd.DataFrame:
+def calculate_weight_of_evidence(xgb_scorecard: pd.DataFrame, interactions=False) -> pd.DataFrame:
     """
     Calculate the Weight-of-Evidence (WOE) score for each group in the XGBoost scorecard.
     Here we flip the traditional WOE formula (negative log-likelihood) and focus on the
@@ -180,13 +172,9 @@ def calculate_weight_of_evidence(
 
     if interactions is False:
         if "CumNonEvents" not in woe_table.columns:
-            woe_table["CumNonEvents"] = woe_table.groupby("Tree")[
-                "NonEvents"
-            ].transform("sum")
+            woe_table["CumNonEvents"] = woe_table.groupby("Tree")["NonEvents"].transform("sum")
         if "CumEvents" not in woe_table.columns:
-            woe_table["CumEvents"] = woe_table.groupby("Tree")[
-                "Events"
-            ].transform("sum")
+            woe_table["CumEvents"] = woe_table.groupby("Tree")["Events"].transform("sum")
     # Calculate Weight-of-Evidence (WOE), Good's formula from Bayes factor
     woe_table["WOE"] = np.log(
         np.where(
@@ -245,10 +233,9 @@ def calculate_likelihood(xgb_scorecard: pd.DataFrame) -> pd.Series:
 
     return pd.Series(woe_table["Likelihood"].astype(float), name="Likelihood")
 
+
 # pylint: disable=R0914
-def convert_to_sql(
-    xgb_scorecard: pd.DataFrame, my_table: str
-) -> str:  # pylint: disable=R0914
+def convert_to_sql(xgb_scorecard: pd.DataFrame, my_table: str) -> str:  # pylint: disable=R0914
     """Converts a scorecard into an SQL format.
 
     This function allows to do ad-hoc predictions via SQL.
@@ -298,16 +285,13 @@ def convert_to_sql(
             combined_conditions = " \n          AND ".join(case_conditions)
 
             # Append case when statement with proper indentation
-            case_query += (
-                f"\n          WHEN ({combined_conditions}) \n     THEN {points}"
-            )
+            case_query += f"\n          WHEN ({combined_conditions}) \n     THEN {points}"
 
         # Add the case query for the tree to the list
         sql_queries.append(case_query)
 
     case_statements = [
-        f"CASE {q.strip()}\n     END AS cte_tree_{tree_id}"
-        for tree_id, q in enumerate(sql_queries)
+        f"CASE {q.strip()}\n     END AS cte_tree_{tree_id}" for tree_id, q in enumerate(sql_queries)
     ]
 
     # Combine the list of CASE statements into a single string with newline
@@ -316,12 +300,7 @@ def convert_to_sql(
 
     # Construct the final SQL query with the CASE statements and other parts
     cte_with_scores = (
-        "WITH scorecard AS\n"
-        "(\n"
-        "    SELECT *,\n"
-        f"    {case_statements_str}\n"
-        f"    FROM {my_table}\n"
-        ")\n"
+        f"WITH scorecard AS\n(\n    SELECT *,\n    {case_statements_str}\n    FROM {my_table}\n)\n"
     )
 
     # Create the part before the 'SELECT' statement
@@ -331,12 +310,7 @@ def convert_to_sql(
     final_query += "SELECT *,\n"
     final_query += (
         "    "
-        + " + \n    ".join(
-            [
-                f"cte_tree_{tree_id}"
-                for tree_id in scorecard_table["Tree"].unique()
-            ]
-        )
+        + " + \n    ".join([f"cte_tree_{tree_id}" for tree_id in scorecard_table["Tree"].unique()])
         + "\nAS score\n"
     )
 
@@ -344,3 +318,249 @@ def convert_to_sql(
     final_query += "FROM scorecard"
 
     return final_query
+
+
+class CatBoostPreprocessor(BaseEstimator, TransformerMixin):
+    """
+    Preprocess high-cardinality categorical features for interpretable CatBoost models.
+    You can control either:
+      - max_categories (top N by frequency)
+      - top_p (top N% cumulative frequency)
+    """
+
+    def __init__(self, max_categories=None, top_p=0.9, other_token="__other__"):
+        assert max_categories or top_p, "Set either `max_categories` or `top_p`"
+        self.max_categories = max_categories
+        self.top_p = top_p
+        self.other_token = other_token
+        self.category_maps = {}
+        self.cat_features_ = None
+
+    def fit(self, X: pd.DataFrame, y=None, cat_features: list[str] = None):
+        """Fit the preprocessor to the DataFrame."""
+        self.cat_features_ = cat_features or X.select_dtypes(include="object").columns.tolist()
+
+        for col in self.cat_features_:
+            vc = X[col].astype(str).value_counts(dropna=False).sort_values(ascending=False)
+            if self.top_p is not None:
+                cumulative = vc.cumsum() / vc.sum()
+                top_cats = cumulative[cumulative <= self.top_p].index.tolist()
+            else:
+                top_cats = vc.nlargest(self.max_categories).index.tolist()
+
+            self.category_maps[col] = set(top_cats)
+
+        return self
+
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Transform the DataFrame by replacing low-frequency categories."""
+        X_ = X.copy()
+        for col in self.cat_features_:
+            allowed = self.category_maps[col]
+            X_[col] = (
+                X_[col]
+                .astype(str)
+                .apply(lambda x, allowed=allowed: x if x in allowed else self.other_token)
+            )
+        return X_
+
+    # pylint: disable=arguments-differ
+    def fit_transform(
+        self, X: pd.DataFrame, y=None, cat_features: list[str] = None
+    ) -> pd.DataFrame:
+        """Fit the preprocessor and transform the data."""
+        return self.fit(X, y, cat_features).transform(X)
+
+    def __call__(self, X: pd.DataFrame, cat_features: list[str]) -> pd.DataFrame:
+        """A callable interface for the preprocessor."""
+        return self.fit_transform(X, cat_features=cat_features)
+
+    def get_mapping(self) -> dict:
+        """Get the mapping of categorical features to their top categories."""
+        return self.category_maps
+
+
+class CatBoostTreeVisualizer:
+    """Class to visualize CatBoost trees with correct branch ordering and accurate split conditions."""
+
+    def __init__(self, scorecard: pd.DataFrame, plot_config: Dict[str, Any] = None):
+        self.scorecard = scorecard
+        self.tree_cache = {}
+        self.plot_config = plot_config or {}
+
+        # Default configuration
+        self.config = {
+            "facecolor": "#ffffff",
+            "edgecolor": "black",
+            "edgewidth": 0,
+            "font_size": 14,
+            "figsize": (18, 10),
+            "level_distance": 10.0,
+            "sibling_distance": 10.0,
+            "fontfamily": "monospace",
+            "yes_color": "#1f77b4",  # Blue for "Yes" branches
+            "no_color": "#ff7f0e",  # Orange for "No" branches
+            "leaf_color": "#2ca02c",  # Green for leaf nodes
+        }
+        # Update the config with user-defined plot_config
+        try:
+            self.config |= self.plot_config
+        except TypeError:  # This will happen in Python < 3.9
+            self.config.update(self.plot_config)
+
+    def _parse_condition(self, condition: str) -> str:
+        """Format conditions to accurately represent CatBoost's splitting logic."""
+        if " <= " in condition:
+            parts = condition.split(" <= ")
+            return f"{parts[0]} > {parts[1]}"  # Convert to CatBoost's actual split logic
+        elif " > " in condition:
+            parts = condition.split(" > ")
+            return f"{parts[0]} ≤ {parts[1]}"  # Convert to complement
+        elif " in [" in condition:
+            cats = condition.split(" in [")[1].split("]")[0]
+            return f"{condition.split(' in [')[0]} ∈ {{{cats}}}"
+        elif " not in [" in condition:
+            cats = condition.split(" not in [")[1].split("]")[0]
+            return f"{condition.split(' not in [')[0]} ∉ {{{cats}}}"
+        return condition
+
+    def build_tree(self, tree_idx: int) -> dict:
+        """Build tree structure with correct CatBoost branch ordering."""
+        tree_df = self.scorecard[self.scorecard["Tree"] == tree_idx]
+        leaf_count = len(tree_df)
+        depth = leaf_count.bit_length() - 1
+
+        path_to_leaf = {format(i, f"0{depth}b"): i for i in range(leaf_count)}
+
+        def build_node(path: str, level: int) -> dict:
+            if level == depth:
+                leaf_idx = path_to_leaf[path]
+                row = tree_df.iloc[leaf_idx]
+
+                return {
+                    "name": (
+                        f"count: {int(row['Count'])}\n"
+                        f"rate: {row['EventRate']:.3f}\n"
+                        f"woe: {row['WOE']:.3f}\n"
+                        f"val: {row['LeafValue']:.3f}"
+                    ),
+                    "depth": level,
+                    "is_leaf": True,
+                }
+
+            sample_leaf = next(k for k in path_to_leaf if k.startswith(path))
+            full_condition = tree_df.iloc[path_to_leaf[sample_leaf]]["Conditions"]
+            level_condition = full_condition.split(" AND ")[level]
+
+            return {
+                "name": self._parse_condition(level_condition),
+                "depth": level,
+                "children": {
+                    # Note: In CatBoost, "Yes" path is when condition is TRUE (feature > threshold)
+                    "Yes": build_node(f"{path}1", level + 1),
+                    "No": build_node(f"{path}0", level + 1),
+                },
+            }
+
+        tree_structure = build_node("", 0)
+        self.tree_cache[tree_idx] = tree_structure
+        return tree_structure
+
+    def _draw_tree(
+        self,
+        node: Dict[str, Any],
+        depth: int = 0,
+        pos_x: float = 0.0,
+        level_distance: float = None,
+        sibling_distance: float = None,
+    ) -> None:
+        """Draw tree with accurate CatBoost split logic."""
+        if level_distance is None:
+            level_distance = self.config["level_distance"]
+        if sibling_distance is None:
+            sibling_distance = self.config["sibling_distance"]
+
+        node_pos = (pos_x, -depth * level_distance)
+
+        # Calculate optimal vertical spacing
+        line_height = 0.15 * level_distance
+        initial_offset = 0.5 * line_height * (node["name"].count("\n") - 1)
+
+        # Draw each line of text
+        for i, line in enumerate(node["name"].split("\n")):
+            plt.text(
+                node_pos[0],
+                node_pos[1] - initial_offset + i * line_height,
+                line,
+                ha="center",
+                va="center",
+                fontsize=self.config["font_size"],
+                fontfamily=self.config["fontfamily"],
+                # add white background
+                bbox=dict(
+                    boxstyle="round,pad=0.3",
+                    facecolor=self.config["facecolor"],
+                    edgecolor=self.config["edgecolor"],
+                    linewidth=self.config["edgewidth"],
+                ),
+            )
+
+        if "children" in node:
+            for label, child in node["children"].items():
+                offset = (1.0 if label == "Yes" else -1.0) * sibling_distance
+                child_x = pos_x + offset
+                child_y = -((depth + 1) * level_distance)
+
+                # Draw connection line with appropriate color
+                line_color = self.config["yes_color"] if label == "Yes" else self.config["no_color"]
+                plt.plot(
+                    [pos_x, child_x],
+                    [node_pos[1], child_y],
+                    color=line_color,
+                    linewidth=1.5,
+                    linestyle="-",
+                    alpha=0.7,
+                )
+
+                # Position branch labels
+                label_x = (pos_x + child_x) / 2
+                label_y = (node_pos[1] + child_y) / 2
+
+                plt.text(
+                    label_x,
+                    label_y,
+                    label,
+                    fontsize=self.config["font_size"] - 1,
+                    fontfamily=self.config["fontfamily"],
+                    ha="center",
+                    va="center",
+                    color=line_color,
+                    bbox=dict(
+                        boxstyle="round,pad=0.2",
+                        facecolor=self.config["facecolor"],
+                        edgecolor=self.config["edgecolor"],
+                        linewidth=self.config["edgewidth"],
+                    ),
+                )
+
+                self._draw_tree(
+                    child,
+                    depth + 1,
+                    child_x,
+                    level_distance,
+                    sibling_distance / 1.8,
+                )
+
+    def plot_tree(self, tree_idx: int = 0, title: str = None) -> None:
+        """Plot tree with accurate CatBoost split logic."""
+        if tree_idx not in self.tree_cache:
+            self.build_tree(tree_idx)
+
+        tree = self.tree_cache[tree_idx]
+        plt.figure(figsize=self.config["figsize"])
+        self._draw_tree(tree)
+        if title:
+            plt.title(title, fontsize=self.config["font_size"] + 2)
+        plt.axis("off")
+        plt.tight_layout()
+        plt.show()
