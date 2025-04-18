@@ -458,15 +458,15 @@ Contributions are welcome! For bug reports or feature requests, please open an i
 For code contributions, please open a pull request.
 
 ## Version
-Current version: 0.2.3
+Current version: 0.2.4
 
 ## Changelog
 
 ### [0.2.4] - 2025-04-18
-- Changed the build distribution inpyproject.toml.
+- Changed the build distribution in pyproject.toml.
 
 ### [0.2.3] - 2025-04-18
-- Added support for CatBoost classificationmodels and switch to `uv` for packaging.
+- Added support for CatBoost classification models and switch to `uv` for packaging.
 - Python version requirement updated to 3.10-3.11.
 
 ### [0.2.2] - 2024-05-08
