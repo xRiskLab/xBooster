@@ -1,0 +1,57 @@
+{
+    "[python]": {
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.fixAll": "explicit",
+            "source.organizeImports": "explicit"
+        },
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.rulers": [100],
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true,
+        "editor.detectIndentation": false
+    },
+    "notebook.formatOnSave.enabled": true,
+    "notebook.codeActionsOnSave": {
+        "notebook.source.fixAll": "explicit",
+        "notebook.source.organizeImports": "explicit"
+    },
+    "python.analysis.typeCheckingMode": "off",
+    "python.analysis.diagnosticMode": "workspace",
+    "python.analysis.extraPaths": ["xbooster"],
+    "python.analysis.ignore": [
+        "**/__init__.py",
+        "**/tests/*",
+        "**/examples/*"
+    ],
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportGeneralTypeIssues": "none",
+        "reportOptionalMemberAccess": "none",
+        "reportOptionalSubscript": "none",
+        "reportOptionalIterable": "none",
+        "reportOptionalCall": "none",
+        "reportOptionalOperand": "none",
+        "reportUnknownMemberType": "none",
+        "reportUnknownVariableType": "none",
+        "reportUnknownArgumentType": "none",
+        "reportUnknownLambdaType": "none",
+        "reportMissingTypeStubs": "none",
+        "reportInvalidTypeVarUse": "none",
+        "reportInvalidStubStatement": "none",
+        "reportUntypedFunctionDecorator": "none",
+        "reportUntypedClassDecorator": "none",
+        "reportUntypedBaseClass": "none",
+        "reportUntypedNamedTuple": "none",
+        "reportPrivateUsage": "none"
+    },
+    "python.analysis.typeCheckingRules": {
+        "enable": true,
+        "strictDictionaryInference": false,
+        "strictListInference": false,
+        "strictParameterNoneValue": false,
+        "strictSetInference": false,
+        "strictTupleInference": false
+    },
+    "ruff.importStrategy": "fromEnvironment",
+    "ruff.path": ["xbooster", "tests"]
+}

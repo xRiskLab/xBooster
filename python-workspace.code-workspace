@@ -1,0 +1,35 @@
+{
+    "folders": [
+        {
+            "path": "."
+        }
+    ],
+    "settings": {
+        "[python]": {
+            "editor.formatOnSave": true,
+            "editor.codeActionsOnSave": {
+                "source.fixAll": "explicit",
+                "source.organizeImports": "explicit"
+            },
+            "editor.defaultFormatter": "charliermarsh.ruff"
+        },
+        "ruff.interpreter": [
+            "${workspaceFolder}/.venv/bin/python"
+        ],
+        "[notebook]": {
+            "editor.formatOnSave": true,
+            "editor.codeActionsOnSave": {
+                "notebook.source.fixAll": "explicit",
+                "notebook.source.organizeImports": "explicit"
+            }
+        }
+    },
+    "extensions": {
+        "recommendations": [
+          "charliermarsh.ruff",
+          "ms-python.python",
+          "njpwerner.autodocstring",
+          "ms-toolsai.jupyter"
+        ]
+      }
+}

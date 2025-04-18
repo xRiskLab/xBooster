@@ -1,0 +1,15 @@
+{
+  "name": "xbooster Development",
+  "image": "mcr.microsoft.com/vscode/devcontainers/python:3.9",
+  "postCreateCommand": "curl -sSL https://install.python-poetry.org | python3 - && poetry install",
+  "settings": {
+    "terminal.integrated.defaultProfile.linux": "bash"
+  },
+  "extensions": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "sourcery.sourcery"
+  ],
+  "forwardPorts": [8080],
+  "remoteUser": "vscode"
+}
