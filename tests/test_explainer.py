@@ -2,28 +2,26 @@
 Test module for xbooster.explainer.
 
 This module contains unit tests for the functions and methods in the xbooster.explainer module.
-It includes tests for plotting functions such as plot_importance, plot_score_distribution, 
+It includes tests for plotting functions such as plot_importance, plot_score_distribution,
 and plot_local_importance, as well as the build_interactions_splits function.
 
 """
 
 import unittest
-import pandas as pd
+
 import numpy as np
+import pandas as pd
 import pytest
-from xbooster.explainer import (  # pylint: disable=E0401
+import xgboost as xgb
+
+from xbooster.constructor import XGBScorecardConstructor  # pylint: disable=E0401
+from xbooster.explainer import (
+    TreeVisualizer,  # pylint: disable=E0401
     build_interactions_splits,  # pylint: disable=E0401
     plot_importance,  # pylint: disable=E0401
-    plot_score_distribution,  # pylint: disable=E0401
     plot_local_importance,  # pylint: disable=E0401
-)  # pylint: disable=E0401
-from xbooster.constructor import (
-    XGBScorecardConstructor,
-)  # pylint: disable=E0401
-from xbooster.explainer import (
-    TreeVisualizer,
-)  # pylint: disable=E0401
-import xgboost as xgb
+    plot_score_distribution,  # pylint: disable=E0401
+)
 
 
 class TestExplainer(unittest.TestCase):
@@ -43,9 +41,7 @@ class TestExplainer(unittest.TestCase):
             test_obj.setUp()
         """
         # Mock data for testing
-        self.model = (
-            None  # Assume we have a trained XGBoost model
-        )
+        self.model = None  # Assume we have a trained XGBoost model
         self.dataset = pd.DataFrame(
             {
                 "feature1": np.random.rand(500),
@@ -63,9 +59,7 @@ class TestExplainer(unittest.TestCase):
         )
         xgb_model = xgb.XGBClassifier()
         xgb_model.fit(X, y)
-        self.scorecard_constructor = (
-            XGBScorecardConstructor(xgb_model, X, y)
-        )
+        self.scorecard_constructor = XGBScorecardConstructor(xgb_model, X, y)
         self.scorecard_constructor.construct_scorecard()  # Build the scorecard
         self.scorecard_constructor.create_points()  # Create scorecard points
         self.sample_to_explain = pd.DataFrame(
@@ -75,9 +69,7 @@ class TestExplainer(unittest.TestCase):
             }
         )
         self.y_true = self.dataset["label"]
-        self.y_pred = pd.Series(
-            np.random.rand(500), index=self.y_true.index
-        )
+        self.y_pred = pd.Series(np.random.rand(500), index=self.y_true.index)
 
     def test_build_interactions_splits(self):
         """
@@ -88,9 +80,7 @@ class TestExplainer(unittest.TestCase):
         assertions can be added based on the expected behavior.
 
         """
-        splits_df = build_interactions_splits(
-            scorecard_constructor=self.scorecard_constructor
-        )
+        splits_df = build_interactions_splits(scorecard_constructor=self.scorecard_constructor)
         self.assertIsInstance(splits_df, pd.DataFrame)
 
     @pytest.mark.filterwarnings("ignore::UserWarning")
@@ -113,6 +103,20 @@ class TestExplainer(unittest.TestCase):
                 metric="InvalidMetric",
             )
 
+        # Test with CatBoost constructor (should raise NotImplementedError)
+        from catboost import CatBoostClassifier
+
+        from xbooster.cb_constructor import CatBoostScorecardConstructor
+
+        catboost_model = CatBoostClassifier(iterations=10, depth=3, verbose=0)
+        catboost_model.fit(self.dataset[["feature1", "feature2"]], self.dataset["label"])
+        catboost_constructor = CatBoostScorecardConstructor(
+            catboost_model, self.dataset[["feature1", "feature2"]], self.dataset["label"]
+        )
+
+        with self.assertRaises(NotImplementedError):
+            plot_importance(scorecard_constructor=catboost_constructor)
+
     @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_plot_score_distribution(self):
         """
@@ -125,9 +129,7 @@ class TestExplainer(unittest.TestCase):
         """
         with self.assertRaises(ValueError):
             plot_score_distribution()  # Should raise ValueError
-        plot_score_distribution(
-            y_true=self.y_true, y_pred=self.y_pred
-        )
+        plot_score_distribution(y_true=self.y_true, y_pred=self.y_pred)
 
     @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_plot_local_importance(self):
@@ -140,13 +142,10 @@ class TestExplainer(unittest.TestCase):
         when a valid input is provided.
 
         """
-    # Test with non-DataFrame input to confirm it raises ValueError
+        # Test with non-DataFrame input to confirm it raises ValueError
         with self.assertRaises(ValueError):
-            sample_to_explain = self.dataset[: 1]
-            plot_local_importance(
-                self.scorecard_constructor,
-                sample_to_explain
-            )
+            sample_to_explain = self.dataset[:1]
+            plot_local_importance(self.scorecard_constructor, sample_to_explain)
 
     def test_tree_visualizer(self):
         """
@@ -166,26 +165,16 @@ class TestExplainer(unittest.TestCase):
 
         # Check if parsing XGBoost model output works correctly
         tree_visualizer = TreeVisualizer()
-        tree_visualizer.parse_xgb_output(
-            scorecard_constructor=self.scorecard_constructor
-        )
-        self.assertIsInstance(
-            tree_visualizer.tree_dump, dict
-        )
+        tree_visualizer.parse_xgb_output(scorecard_constructor=self.scorecard_constructor)
+        self.assertIsInstance(tree_visualizer.tree_dump, dict)
 
         # Check if decision tree is plotted successfully
         try:
-            tree_visualizer.plot_tree(
-                scorecard_constructor=self.scorecard_constructor
-            )
+            tree_visualizer.plot_tree(scorecard_constructor=self.scorecard_constructor)
         except ValueError as ve:
-            self.fail(
-                f"Failed to plot decision tree: {str(ve)}"
-            )
+            self.fail(f"Failed to plot decision tree: {str(ve)}")
         except RuntimeError as re:
-            self.fail(
-                f"A runtime error occurred during plotting: {str(re)}"
-            )
+            self.fail(f"A runtime error occurred during plotting: {str(re)}")
 
 
 if __name__ == "__main__":
