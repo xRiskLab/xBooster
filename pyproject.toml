@@ -1,11 +1,10 @@
 [project]
 name = "xbooster"
-version = "0.2.3"
+version = "0.2.4"
 description = "Explainable Boosted Scoring"
 authors = [
     {name = "xRiskLab", email = "contact@xrisklab.ai"}
 ]
-license = {text = "MIT"}
 readme = "README.md"
 keywords = ["machine learning", "credit scoring", "xgboost", "catboost", "explainability"]
 classifiers = [
@@ -45,6 +44,9 @@ dev = [
     "nbconvert>=7.16.6",
     "pandas-stubs>=2.2.3",
 ]
+
+[tool.setuptools.packages.find]
+exclude = ["tmp*", "catboost_info*"]
 
 [tool.uv]
 default-groups = ["dev"]

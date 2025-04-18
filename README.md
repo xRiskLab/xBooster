@@ -462,6 +462,9 @@ Current version: 0.2.3
 
 ## Changelog
 
+### [0.2.4] - 2025-04-18
+- Changed the build distribution inpyproject.toml.
+
 ### [0.2.3] - 2025-04-18
 - Added support for CatBoost classificationmodels and switch to `uv` for packaging.
 - Python version requirement updated to 3.10-3.11.
