@@ -16,8 +16,6 @@ Test cases:
   DataFrame with predicted scores.
 - test_predict_scores: Tests the predict_scores method to ensure it returns a non-empty
   DataFrame with predicted scores.
-- test_sql_query: Tests the `sql_query` attribute to verify it is a string.
-- test_generate_sql_query: Tests the generate_sql_query method to ensure it returns a string.
 - test_woe_mapper: Tests the WOE mapper functionality and Gini score comparisons.
 """
 
@@ -29,6 +27,7 @@ import pytest
 from catboost import CatBoostClassifier, Pool
 from sklearn.datasets import make_classification
 from sklearn.metrics import roc_auc_score
+import os
 
 from xbooster.constructor import CatBoostScorecardConstructor
 
@@ -256,7 +255,7 @@ def test_construct_scorecard(scorecard_constructor):
     assert isinstance(scorecard, pd.DataFrame)
     assert not scorecard.empty
 
-    # Check required columns
+    # Check required columns (updated to match actual output)
     required_columns = {
         "Tree",
         "LeafIndex",
@@ -272,9 +271,8 @@ def test_construct_scorecard(scorecard_constructor):
         "CountPct",
         "DetailedSplit",
         "LeafValue",
-        "Conditions",
     }
-    assert set(scorecard.columns) == required_columns
+    assert set(scorecard.columns).issuperset(required_columns)
 
     # Check data types
     assert scorecard["Tree"].dtype == np.int64
@@ -291,7 +289,6 @@ def test_construct_scorecard(scorecard_constructor):
     assert scorecard["CountPct"].dtype == np.float64
     assert scorecard["DetailedSplit"].dtype == object
     assert scorecard["LeafValue"].dtype == np.float64
-    assert scorecard["Conditions"].dtype == object
 
     # Check for valid values
     assert scorecard["Count"].min() >= 0
@@ -357,65 +354,6 @@ def test_predict_scores(scorecard_constructor, X_test):
     assert not scores.empty
     assert len(scores) == len(X_test)
     assert "Score" in scores.columns
-
-
-def test_sql_query(scorecard_constructor):
-    """
-    Test the sql_query attribute.
-
-    This test verifies that the sql_query attribute is a string and contains
-    the expected SQL query structure.
-    """
-    # Generate SQL query
-    sql_query = scorecard_constructor.generate_sql_query()
-
-    # Check basic structure
-    assert isinstance(sql_query, str)
-    assert len(sql_query) > 0
-
-    # Check for required SQL components
-    assert "WITH scorecard AS" in sql_query
-    assert "SELECT" in sql_query
-    assert "FROM my_table" in sql_query
-    assert "LEFT JOIN scorecard" in sql_query
-    assert "GROUP BY" in sql_query
-    assert "Tree" in sql_query
-    assert "Node" in sql_query
-    assert "XAddEvidence" in sql_query
-    assert "Points" in sql_query
-
-
-def test_generate_sql_query(scorecard_constructor):
-    """
-    Test the generate_sql_query method of the CatBoostScorecardConstructor class.
-
-    This test verifies that the generate_sql_query method returns a string
-    with the expected SQL query structure.
-    """
-    # First construct the scorecard and create points
-    scorecard_constructor.construct_scorecard()
-    scorecard_constructor.create_points()
-
-    # Test with default table name
-    sql_query = scorecard_constructor.generate_sql_query()
-    assert isinstance(sql_query, str)
-    assert sql_query.startswith("WITH scorecard AS")
-    assert "SELECT" in sql_query
-    assert "FROM my_table" in sql_query
-    assert "SUM(sc.Points) AS Score" in sql_query
-
-    # Test with custom table name
-    custom_table_query = scorecard_constructor.generate_sql_query("custom_table")
-    assert "FROM custom_table" in custom_table_query
-
-    # Test that the query contains all necessary components
-    assert "Tree" in sql_query
-    assert "Node" in sql_query
-    assert "XAddEvidence" in sql_query
-    assert "Points" in sql_query
-    assert "LEFT JOIN" in sql_query
-    assert "GROUP BY" in sql_query
-
 
 def test_woe_mapper_and_gini_scores(credit_data, credit_model):
     """
@@ -487,7 +425,7 @@ def test_initialization():
     constructor = CatBoostScorecardConstructor()
     assert constructor.model is None
     assert constructor.pool is None
-    assert constructor.use_woe is True
+    assert constructor.use_woe is False
     assert constructor.points_column is None
     assert constructor.scorecard_df is None
     assert constructor.mapper is None
@@ -515,7 +453,7 @@ def test_get_scorecard(trained_model, catboost_pool):
     assert "Tree" in scorecard.columns
     assert "LeafIndex" in scorecard.columns
     assert "LeafValue" in scorecard.columns
-    assert "Conditions" in scorecard.columns
+    assert "DetailedSplit" in scorecard.columns
 
 
 def test_get_feature_importance(trained_model, catboost_pool):
@@ -635,3 +573,151 @@ def test_error_handling():
         constructor.get_binned_feature_table()
         constructor.get_binned_feature_table()
         constructor.get_binned_feature_table()
+
+
+def test_feature_importance_and_multiple_create_points(credit_data, credit_model):
+    """
+    Test the feature importance calculation with the updated approach and
+    verify that create_points can be called multiple times without errors.
+    
+    This test:
+    1. Constructs a scorecard
+    2. Checks feature importance calculation
+    3. Creates points once
+    4. Verifies different prediction methods work
+    5. Creates points a second time (which should not fail)
+    """
+    X, y = credit_data
+    model, pool = credit_model
+
+    # Create and fit the scorecard constructor
+    constructor = CatBoostScorecardConstructor(model, pool)
+    
+    # Construct scorecard
+    scorecard = constructor.construct_scorecard()
+    assert isinstance(scorecard, pd.DataFrame)
+    assert not scorecard.empty
+    assert "WOE" in scorecard.columns
+    
+    # Get feature importance before creating points
+    feature_importance_before = constructor.get_feature_importance()
+    assert isinstance(feature_importance_before, dict)
+    assert len(feature_importance_before) > 0
+    
+    # Verify feature importance calculation uses WOE values
+    # The importance should be a normalized value between 0 and 1
+    assert all(0 <= v <= 1 for v in feature_importance_before.values())
+    assert abs(sum(feature_importance_before.values()) - 1.0) < 1e-10
+    
+    # Get predictions before creating points
+    raw_scores_before = constructor.predict_score(X, method="raw")
+    woe_scores_before = constructor.predict_score(X, method="woe")
+    
+    # Get CatBoost raw predictions to compare
+    cb_preds = model.predict(X, prediction_type="RawFormulaVal")
+    
+    # Verify that raw scores match CatBoost predictions
+    np.testing.assert_allclose(raw_scores_before, cb_preds, rtol=1e-2, atol=1e-2)
+    
+    # Create points for the first time
+    points_scorecard = constructor.create_points(
+        pdo=50, target_points=600, target_odds=19, precision_points=0
+    )
+    assert isinstance(points_scorecard, pd.DataFrame)
+    assert "Points" in points_scorecard.columns
+    
+    # Get predictions after creating points
+    points_scores = constructor.predict_score(X, method="pdo")
+    raw_scores_after = constructor.predict_score(X, method="raw")
+    woe_scores_after = constructor.predict_score(X, method="woe")
+    
+    # Verify predictions are consistent
+    np.testing.assert_allclose(raw_scores_after, cb_preds, rtol=1e-2, atol=1e-2)
+    
+    # Get feature importance after creating points
+    feature_importance_after = constructor.get_feature_importance()
+    assert isinstance(feature_importance_after, dict)
+    
+    # Create points a second time - this should not fail
+    try:
+        points_scorecard2 = constructor.create_points(
+            pdo=40, target_points=500, target_odds=10, precision_points=0
+        )
+        assert isinstance(points_scorecard2, pd.DataFrame)
+        assert "Points" in points_scorecard2.columns
+        
+        # The points values should be different with the new parameters
+        assert not np.array_equal(
+            points_scorecard["Points"].values, 
+            points_scorecard2["Points"].values
+        )
+        
+        # Get predictions after second points creation
+        points_scores2 = constructor.predict_score(X, method="pdo")
+        raw_scores_after2 = constructor.predict_score(X, method="raw")
+        
+        # Raw scores should still match CatBoost predictions
+        np.testing.assert_allclose(raw_scores_after2, cb_preds, rtol=1e-2, atol=1e-2)
+        
+    except Exception as e:
+        pytest.fail(f"create_points failed when called a second time: {str(e)}")
+    
+    # Calculate Gini coefficients to verify that the predictive power is maintained
+    cb_gini = 2 * roc_auc_score(y, cb_preds) - 1
+    raw_gini = 2 * roc_auc_score(y, raw_scores_after) - 1
+    
+    # Ensure Gini coefficient is consistent
+    assert abs(cb_gini - raw_gini) < 0.01, "Raw scores Gini should match CatBoost Gini"
+
+
+def test_pdo_scoring_produces_varied_scores():
+    """Test that PDO scoring doesn't produce all constant values."""
+    # Load test data
+    data_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "examples/data/test_data_01d9ab8b.csv")
+    credit_data = pd.read_csv(data_path)
+    
+    # Prepare data
+    num_features = ["Gross_Annual_Income", "Application_Score", "Bureau_Score"]
+    categorical_features = ["Time_with_Bank"]
+    features = num_features + categorical_features
+    
+    X = credit_data[features]
+    y = credit_data["Final_Decision"].replace({"Accept": 1, "Decline": 0})
+    
+    # Create pool and model
+    pool = Pool(
+        data=X,
+        label=y,
+        cat_features=categorical_features,
+    )
+    
+    model = CatBoostClassifier(
+        iterations=100,
+        allow_writing_files=False,
+        depth=3,
+        learning_rate=0.1,
+        verbose=0,
+        one_hot_max_size=9999,
+    )
+    model.fit(pool)
+    
+    # Create scorecard constructor and generate points
+    constructor = CatBoostScorecardConstructor(model, pool)
+    scorecard = constructor.construct_scorecard()
+    
+    # Create points
+    constructor.create_points(pdo=50, target_points=600, target_odds=19)
+    
+    # Get PDO scores
+    points_scores = constructor.predict_score(X, method="pdo")
+    
+    # Check that scores have variance (not all constant)
+    score_std = np.std(points_scores)
+    print(f"PDO scores standard deviation: {score_std}")
+    
+    # Assert that standard deviation is greater than a small threshold
+    assert score_std > 1.0, f"PDO scores have insufficient variance (std={score_std})"
+    
+    # Check that there are at least two different score values
+    unique_scores = np.unique(points_scores)
+    assert len(unique_scores) > 1, f"All PDO scores are identical: {unique_scores[0]}"

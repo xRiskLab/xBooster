@@ -1,3 +1,9 @@
+"""
+catboost_wrapper.py
+
+This module implements the inference functionality for CatBoost models.
+"""
+
 import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
@@ -22,7 +28,7 @@ class CatBoostWOEMapper:
     def __init__(
         self,
         scorecard_df: pd.DataFrame,
-        use_woe: bool = True,
+        use_woe: bool = False,
         points_column: Optional[str] = None,
     ) -> None:
         """
@@ -30,7 +36,7 @@ class CatBoostWOEMapper:
 
         Args:
             scorecard_df: DataFrame containing CatBoost tree structure and metrics
-            use_woe: If True, use WOE values; if False, use LeafValue
+            use_woe: If True, use WOE values; if False, use LeafValue (default: False)
             points_column: If provided, use this column for scoring
         """
         self.scorecard: pd.DataFrame = scorecard_df
@@ -65,7 +71,7 @@ class CatBoostWOEMapper:
     def _extract_feature_names(self) -> List[str]:
         """Extract all unique feature names from the conditions in the scorecard."""
         feature_names: Set[str] = set()
-        for conditions in self.scorecard["Conditions"].dropna():
+        for conditions in self.scorecard["DetailedSplit"].dropna():
             for condition in str(conditions).split(" AND "):
                 if feature := self._get_feature_from_condition(condition):
                     feature_names.add(feature)
@@ -83,7 +89,7 @@ class CatBoostWOEMapper:
     def _build_condition_cache(self) -> None:
         """Build a cache of conditions for each feature for faster lookup."""
         for _, row in self.scorecard.iterrows():
-            conditions = row["Conditions"]
+            conditions = row["DetailedSplit"]
             if not isinstance(conditions, str):
                 continue
             for condition in conditions.split(" AND "):
@@ -107,9 +113,10 @@ class CatBoostWOEMapper:
         )
 
         value_col = self.get_value_column()
+
         for _, row in self.scorecard.iterrows():
             tree_idx = row["Tree"]
-            conditions = row["Conditions"]
+            conditions = row["DetailedSplit"]
             if not isinstance(conditions, str):
                 continue
             value = row[value_col]
@@ -145,30 +152,29 @@ class CatBoostWOEMapper:
 
     def calculate_feature_importance(self) -> Dict[str, float]:
         """
-        Calculate feature importance based on WOE/LeafValue magnitudes.
+        Calculate feature importance as the sum of WOE values per feature.
 
         Returns:
             Dictionary mapping feature names to importance scores
         """
-        if not self.feature_mappings:
-            self.generate_feature_mappings()
+        # First ensure we're using WOE by forcing value_column to WOE
+        original_value_column = self.value_column
+        self.value_column = "WOE"
 
-        importance = {}
-        total_importance = 0.0
-
-        for feature, conditions in self.feature_mappings.items():
-            feature_importance = sum(
-                abs(details["agg_value"]) * details["total_weight"]
-                for details in conditions.values()
-            )
-            total_weight = sum(details["total_weight"] for details in conditions.values())
-            importance[feature] = feature_importance / total_weight if total_weight else 0.0
-            total_importance += importance[feature]
-
-        self.feature_importance = {
-            k: (v / total_importance if total_importance else 0.0) for k, v in importance.items()
-        }
-        return self.feature_importance
+        try:
+            # Create a direct feature importance calculation from the scorecard
+            feature_woe_sum = self.scorecard.groupby("Feature")["WOE"].sum().abs()
+            
+            # Normalize to get relative importance
+            total = feature_woe_sum.sum()
+            importance = (feature_woe_sum / total).to_dict() if total > 0 else {}
+            
+            self.feature_importance = importance
+            return importance
+        
+        finally:
+            # Restore original value column setting
+            self.value_column = original_value_column
 
     def evaluate_condition(self, condition: str, feature_values: Dict[str, Any]) -> bool:
         """
@@ -221,7 +227,7 @@ class CatBoostWOEMapper:
         value_col = self.get_value_column()
 
         for leaf in self._map_instance_to_leaves(features).values():
-            conditions = leaf["Conditions"]
+            conditions = leaf["DetailedSplit"]
             if not isinstance(conditions, str):
                 continue
             value = leaf[value_col]
@@ -245,7 +251,7 @@ class CatBoostWOEMapper:
         for tree_idx in self.tree_indices:
             tree_data = self.scorecard[self.scorecard["Tree"] == tree_idx]
             for _, leaf in tree_data.iterrows():
-                conditions = leaf["Conditions"]
+                conditions = leaf["DetailedSplit"]
                 if isinstance(conditions, str) and all(
                     self.evaluate_condition(cond, features) for cond in conditions.split(" AND ")
                 ):
@@ -331,7 +337,7 @@ class CatBoostWOEMapper:
             Average value for the condition
         """
         relevant_rows = self.scorecard[
-            self.scorecard["Conditions"].str.contains(condition, na=False)
+            self.scorecard["DetailedSplit"].str.contains(condition, na=False)
         ]
         if relevant_rows.empty:
             return 0.0
@@ -369,7 +375,9 @@ class CatBoostWOEMapper:
 
     def get_value_type(self) -> str:
         """Return the type of value being used (Points, WOE, or LeafValue)."""
-        return "Points" if self.points_column else ("WOE" if self.use_woe else "LeafValue")
+        return (
+            "Points" if self.points_column else ("WOE" if self.use_woe else "LeafValue")
+        )
 
     def plot_feature_importance(
         self, figsize: Tuple[int, int] = (12, 8), top_n: Optional[int] = None
@@ -398,7 +406,7 @@ class CatBoostWOEMapper:
         plt.rcParams["font.size"] = 12
 
         # Create horizontal bar plot with consistent color and black border
-        bars = plt.barh(
+        plt.barh(
             range(len(features)),
             importance,
             align="center",
@@ -423,7 +431,9 @@ class CatBoostWOEMapper:
         plt.show()
 
     # Scorecard-based inference
-    def create_scorecard(self, pdo_params: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+    def create_scorecard(
+        self, pdo_params: Optional[Dict[str, Any]] = None
+    ) -> pd.DataFrame:
         """
         Create a statistically aligned scorecard with accurate points calculation.
 
@@ -459,7 +469,9 @@ class CatBoostWOEMapper:
 
         # Base score from average event rate if available
         if "EventRate" in scorecard.columns:
-            base_odds = scorecard["EventRate"].mean() / (1 - scorecard["EventRate"].mean())
+            base_odds = scorecard["EventRate"].mean() / (
+                1 - scorecard["EventRate"].mean()
+            )
         else:
             base_odds = target_odds  # fallback
 
@@ -467,24 +479,17 @@ class CatBoostWOEMapper:
         factor = pdo / np.log(2)
         offset = target_points - factor * np.log(base_odds)
 
-        # Raw contribution score from WOE or LeafValue
-        scorecard["RawScore"] = -factor * scorecard[value_col]
-
+        # Calculate raw scores from WOE or LeafValue
         n_trees = len(scorecard["Tree"].unique())
-        scorecard["RawScore"] = -factor * scorecard[value_col]
-        scorecard["RawScore"] /= n_trees  # Normalize by number of trees
-
-        # Align maximum score within each tree
-        scorecard.set_index("Tree", inplace=True)
-        tree_max = scorecard.groupby("Tree")["RawScore"].max()
-        mean_shift = (tree_max.sum() - offset) / len(tree_max)
-
-        # Final aligned points
-        scorecard["Points"] = scorecard.groupby("Tree")["RawScore"].transform(
-            lambda raw: tree_max[raw.name] - raw - mean_shift
-        )
-        scorecard.reset_index(inplace=True)
-
+        
+        # Directly use the value column for raw score calculation
+        # We divide by number of trees to keep scores at a consistent scale
+        scorecard["RawScore"] = -factor * scorecard[value_col] / n_trees
+        
+        # Calculate points by adding the offset to the raw scores
+        # Each leaf contributes its share to the overall score
+        scorecard["Points"] = offset/n_trees + scorecard["RawScore"]
+        
         # Apply rounding
         scorecard["Points"] = scorecard["Points"].round(precision_points)
         if precision_points <= 0:
@@ -511,7 +516,9 @@ class CatBoostWOEMapper:
         """
         # Validate method
         if method not in ["raw", "woe", "pdo"]:
-            raise ValueError(f"Unknown scoring method: {method}. Use 'raw', 'woe', or 'pdo'.")
+            raise ValueError(
+                f"Unknown scoring method: {method}. Use 'raw', 'woe', or 'pdo'."
+            )
 
         # Check if we need to create the scorecard first
         if method == "pdo" and not hasattr(self, "enhanced_scorecard"):
@@ -520,10 +527,10 @@ class CatBoostWOEMapper:
         # Set the appropriate value column based on method
         original_value_column = self.value_column
         original_use_woe = self.use_woe
+        temp_scorecard = None
 
         try:
             if method == "raw":
-                # For raw predictions, use the original leaf values without transformation
                 self.value_column = "LeafValue"
                 self.use_woe = False
             elif method == "woe":
@@ -531,9 +538,11 @@ class CatBoostWOEMapper:
                 self.use_woe = True
             elif method == "pdo":
                 # Use the enhanced scorecard with Points column
-                temp_scorecard = self.scorecard
-                self.scorecard = self.enhanced_scorecard
+                if hasattr(self, "enhanced_scorecard"):
+                    temp_scorecard = self.scorecard
+                    self.scorecard = self.enhanced_scorecard
                 self.value_column = "Points"
+                self.use_woe = False
 
             # Make prediction using the appropriate method
             if isinstance(features, pd.DataFrame):
@@ -547,12 +556,12 @@ class CatBoostWOEMapper:
             # Restore original settings
             self.value_column = original_value_column
             self.use_woe = original_use_woe
-            if method == "pdo":
+            if temp_scorecard is not None:
                 self.scorecard = temp_scorecard
 
-    def _predict_score_batch_simplified(self, df):
+    def _predict_score_batch(self, df: pd.DataFrame, method: str = "raw") -> np.ndarray:
         """
-        Simplified prediction that uses pandas query/filtering directly.
+        Predict scores for a batch of instances using direct pandas filtering.
         """
         scores = np.zeros(len(df))
         value_col = self.get_value_column()
@@ -563,98 +572,104 @@ class CatBoostWOEMapper:
 
             # Create a mask of unassigned rows
             unassigned = np.ones(len(df), dtype=bool)
+            unassigned_indices = np.arange(len(df))
 
             # For each leaf in this tree
             for _, leaf in tree_data.iterrows():
-                conditions = leaf["Conditions"]
-                if not isinstance(conditions, str):
+                conditions = leaf["DetailedSplit"]
+                if not isinstance(conditions, str) or not np.any(unassigned):
                     continue
 
-                # Only check unassigned rows
-                subset = df[unassigned].copy()
+                # Only process unassigned rows
+                subset = df.loc[unassigned_indices[unassigned]]
                 if len(subset) == 0:
                     continue
 
-                # Convert conditions to pandas query format
-                query_parts = []
-                valid_condition = True
+                # Apply conditions directly to subset using pandas filtering
+                matches = np.ones(len(subset), dtype=bool)
+                valid_filter = True
 
                 for condition in conditions.split(" AND "):
-                    # Extract feature and condition
                     feature = self._get_feature_from_condition(condition)
                     if not feature or feature not in df.columns:
-                        valid_condition = False
+                        valid_filter = False
                         break
 
-                    # Convert condition to pandas query format
-                    if " = " in condition:
-                        value = condition.split(" = ")[1].strip("'\"")
-                        query_parts.append(f"`{feature}` == '{value}'")
-                    elif " != " in condition:
-                        value = condition.split(" != ")[1].strip("'\"")
-                        query_parts.append(f"`{feature}` != '{value}'")
-                    elif " <= " in condition:
-                        value = condition.split(" <= ")[1]
-                        query_parts.append(f"`{feature}` <= {value}")
-                    elif " > " in condition:
-                        value = condition.split(" > ")[1]
-                        query_parts.append(f"`{feature}` > {value}")
-                    elif " IN " in condition:
-                        values_str = condition.split(" IN ")[1].strip("()").split(", ")
-                        values = [v.strip("'\"") for v in values_str]
-                        values_str = ", ".join([f"'{v}'" for v in values])
-                        query_parts.append(f"`{feature}` in [{values_str}]")
-                    elif " NOT IN " in condition:
-                        values_str = condition.split(" NOT IN ")[1].strip("()").split(", ")
-                        values = [v.strip("'\"") for v in values_str]
-                        values_str = ", ".join([f"'{v}'" for v in values])
-                        query_parts.append(f"`{feature}` not in [{values_str}]")
-                    else:
-                        valid_condition = False
+                    # Apply appropriate filter based on condition type
+                    try:
+                        if " = " in condition:
+                            value = condition.split(" = ")[1].strip("'\"")
+                            condition_matches = subset[feature].astype(str) == value
+                        elif " != " in condition:
+                            value = condition.split(" != ")[1].strip("'\"")
+                            condition_matches = subset[feature].astype(str) != value
+                        elif " <= " in condition:
+                            value = float(condition.split(" <= ")[1])
+                            condition_matches = subset[feature].astype(float) <= value
+                        elif " > " in condition:
+                            value = float(condition.split(" > ")[1])
+                            condition_matches = subset[feature].astype(float) > value
+                        else:
+                            valid_filter = False
+                            break
+
+                        matches = matches & condition_matches.values
+                    except Exception:
+                        valid_filter = False
                         break
 
-                if not valid_condition or not query_parts:
+                if not valid_filter:
                     continue
 
-                # Apply the query
-                try:
-                    query = " and ".join(query_parts)
-                    mask = subset.eval(query, engine="python")
-
-                    # Get original indices
-                    matching_indices = subset.index[mask]
-
-                    # Convert to positions in the original unassigned array
-                    positions = np.where(unassigned)[0][mask]
+                # Get indices of matching rows in the original array
+                if np.any(matches):
+                    matching_subset_indices = subset.index[matches]
+                    matching_positions = np.where(
+                        np.isin(unassigned_indices, matching_subset_indices)
+                    )[0]
 
                     # Add the leaf value to matching rows
-                    if len(positions) > 0:
-                        scores[positions] += leaf[value_col]
+                    value = leaf[value_col]
+                    if method == "raw":
+                        # No normalization for raw method
+                        pass
+                    elif method == "woe" and len(self.tree_indices) > 0:
+                        score += leaf[value_col]
+                    scores[unassigned_indices[matching_positions]] += value
 
-                        # Mark these as assigned
-                        unassigned_indices = np.where(unassigned)[0]
-                        unassigned[unassigned_indices[mask]] = False
-                except Exception as e:
-                    print(f"Error applying query '{query}': {e}")
+                    # Mark these as assigned
+                    unassigned[matching_positions] = False
 
-            # For remaining unassigned rows, use the most common leaf
-            if np.any(unassigned):
-                default_leaf = tree_data.iloc[tree_data["Count"].idxmax()]
-                scores[unassigned] += default_leaf[value_col]
+            # For unassigned rows, use the default leaf (most common)
+            if np.any(unassigned) and not tree_data.empty:
+                default_idx = (
+                    tree_data["Count"].idxmax()
+                    if "Count" in tree_data.columns
+                    else tree_data.index[0]
+                )
+                default_leaf = tree_data.loc[default_idx]
+                value = default_leaf[value_col]
+                if method == "raw":
+                    # No normalization for raw method
+                    pass
+                elif method == "woe" and len(self.tree_indices) > 0:
+                    # For WOE, normalize by tree count
+                    value = value / len(self.tree_indices)
+                scores[unassigned_indices[unassigned]] += value
 
         return scores
 
-    def _predict_score_single(self, features: Dict[str, Any]) -> float:
+    def _predict_score_single(self, features: Dict[str, Any], method: str = "raw") -> float:
         """
         Predict score for a single instance with improved handling of categorical features.
 
         Args:
             features: Dictionary of feature name -> value
+            method: Scoring method ('raw', 'woe', or 'pdo')
 
         Returns:
-            Score from summing WOE/LeafValue across trees
+            Score from summing values across trees
         """
-        # Accumulate score from all trees
         score = 0.0
         value_col = self.get_value_column()
 
@@ -664,7 +679,7 @@ class CatBoostWOEMapper:
 
             # Try each leaf in this tree
             for _, leaf in tree_data.iterrows():
-                conditions = leaf["Conditions"]
+                conditions = leaf["DetailedSplit"]
                 if not isinstance(conditions, str):
                     continue
 
@@ -706,7 +721,14 @@ class CatBoostWOEMapper:
 
                 # If all conditions met, add this leaf's value to the score
                 if conditions_met:
-                    score += leaf[value_col]
+                    value = leaf[value_col]
+                    if method == "raw":
+                        # No normalization for raw method
+                        pass
+                    elif method == "woe" and len(self.tree_indices) > 0:
+                        # For WOE, normalize by tree count
+                        value = value / len(self.tree_indices)
+                    score += value
                     assigned = True
                     break
 
@@ -717,95 +739,13 @@ class CatBoostWOEMapper:
                     if "Count" in tree_data.columns
                     else tree_data.index[0]
                 )
-                score += tree_data.loc[default_idx][value_col]
+                value = tree_data.loc[default_idx][value_col]
+                if method == "raw":
+                    # No normalization for raw method
+                    pass
+                elif method == "woe" and len(self.tree_indices) > 0:
+                    # For WOE, normalize by tree count
+                    value = value / len(self.tree_indices)
+                score += value
 
         return score
-
-    def _predict_score_batch(self, df: pd.DataFrame) -> np.ndarray:
-        """
-        Predict scores for a batch of instances using direct pandas filtering.
-        """
-        scores = np.zeros(len(df))
-        value_col = self.get_value_column()
-
-        # For each tree, find the leaf for each instance
-        for tree_idx in self.tree_indices:
-            tree_data = self.scorecard[self.scorecard["Tree"] == tree_idx]
-
-            # Create a mask of unassigned rows
-            unassigned = np.ones(len(df), dtype=bool)
-            unassigned_indices = np.arange(len(df))
-
-            # For each leaf in this tree
-            for _, leaf in tree_data.iterrows():
-                conditions = leaf["Conditions"]
-                if not isinstance(conditions, str) or not np.any(unassigned):
-                    continue
-
-                # Only process unassigned rows
-                subset = df.loc[unassigned_indices[unassigned]]
-                if len(subset) == 0:
-                    continue
-
-                # Apply conditions directly to subset using pandas filtering
-                matches = np.ones(len(subset), dtype=bool)
-                valid_filter = True
-
-                for condition in conditions.split(" AND "):
-                    feature = self._get_feature_from_condition(condition)
-                    if not feature or feature not in df.columns:
-                        valid_filter = False
-                        break
-
-                    # Apply appropriate filter based on condition type
-                    try:
-                        if " = " in condition:
-                            # Extract value without quotes for comparison
-                            value = condition.split(" = ")[1].strip("'\"")
-                            condition_matches = subset[feature].astype(str) == value
-                        elif " != " in condition:
-                            # Extract value without quotes for comparison
-                            value = condition.split(" != ")[1].strip("'\"")
-                            condition_matches = subset[feature].astype(str) != value
-                        elif " <= " in condition:
-                            value = float(condition.split(" <= ")[1])
-                            condition_matches = subset[feature].astype(float) <= value
-                        elif " > " in condition:
-                            value = float(condition.split(" > ")[1])
-                            condition_matches = subset[feature].astype(float) > value
-                        else:
-                            valid_filter = False
-                            break
-
-                        matches = matches & condition_matches.values
-                    except Exception:
-                        valid_filter = False
-                        break
-
-                if not valid_filter:
-                    continue
-
-                # Get indices of matching rows in the original array
-                if np.any(matches):
-                    matching_subset_indices = subset.index[matches]
-                    matching_positions = np.where(
-                        np.isin(unassigned_indices, matching_subset_indices)
-                    )[0]
-
-                    # Add the leaf value to matching rows
-                    scores[unassigned_indices[matching_positions]] += leaf[value_col]
-
-                    # Mark these as assigned
-                    unassigned[matching_positions] = False
-
-            # For unassigned rows, use the default leaf (most common)
-            if np.any(unassigned) and not tree_data.empty:
-                default_idx = (
-                    tree_data["Count"].idxmax()
-                    if "Count" in tree_data.columns
-                    else tree_data.index[0]
-                )
-                default_leaf = tree_data.loc[default_idx]
-                scores[unassigned_indices[unassigned]] += default_leaf[value_col]
-
-        return scores

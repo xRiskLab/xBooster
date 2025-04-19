@@ -199,7 +199,7 @@ xbooster provides experimental support for CatBoost models with reduced function
 ```python
 import pandas as pd
 from catboost import CatBoostClassifier, Pool
-from xbooster.cb_constructor import CatBoostScorecardConstructor
+from xbooster.constructor import CatBoostScorecardConstructor
 
 # Load data and prepare features
 data_path = "examples/data/test_data_01d9ab8b.csv"
@@ -231,7 +231,10 @@ model = CatBoostClassifier(
 model.fit(pool)
 
 # Create and fit the scorecard constructor
-constructor = CatBoostScorecardConstructor(model, pool)
+constructor = CatBoostScorecardConstructor(model, pool)  # use_woe=False is the default, using raw LeafValue
+
+# Alternatively, to use WOE values instead of raw leaf values:
+# constructor = CatBoostScorecardConstructor(model, pool, use_woe=True)
 
 # Construct the scorecard
 scorecard = constructor.construct_scorecard()
@@ -242,10 +245,32 @@ print(scorecard.head(3))
 print("\nRaw Leaf Values:")
 print(scorecard[["Tree", "LeafIndex", "LeafValue", "WOE"]].head(10))
 
-# Make predictions using different methods
+# Make predictions using different methods - Do this BEFORE creating points
+# Original CatBoost predictions
+cb_preds = model.predict(X, prediction_type="RawFormulaVal")
+
+# Get raw scores and WOE scores
 raw_scores = constructor.predict_score(X, method="raw")
 woe_scores = constructor.predict_score(X, method="woe")
+
+# Now create points for the scorecard
+scorecard_with_points = constructor.create_points(
+    pdo=50, 
+    target_points=600, 
+    target_odds=19, 
+    precision_points=0
+)
+
+# Calculate points-based scores
 points_scores = constructor.predict_score(X, method="pdo")
+
+# Even after creating points, raw and WOE scores remain consistent
+# This is because the constructor maintains the original mappings
+new_raw_scores = constructor.predict_score(X, method="raw")
+new_woe_scores = constructor.predict_score(X, method="woe")
+
+# Verify that raw scores still match CatBoost predictions
+np.testing.assert_allclose(new_raw_scores, cb_preds, rtol=1e-2, atol=1e-2)
 
 # Calculate Gini scores
 from sklearn.metrics import roc_auc_score
@@ -458,9 +483,12 @@ Contributions are welcome! For bug reports or feature requests, please open an i
 For code contributions, please open a pull request.
 
 ## Version
-Current version: 0.2.4
+Current version: 0.2.5
 
 ## Changelog
+
+### [0.2.5] - 2025-04-19
+- Minor changes in `catboost_wrapper.py` and `cb_constructor.py` to improve the scorecard generation.
 
 ### [0.2.4] - 2025-04-18
 - Changed the build distribution in pyproject.toml.

@@ -33,7 +33,7 @@ class CatBoostScorecardConstructor:
         self,
         model: Optional[CatBoostClassifier] = None,
         pool: Optional[Pool] = None,
-        use_woe: bool = True,
+        use_woe: bool = False,
         points_column: Optional[str] = None,
     ) -> None:
         """
@@ -42,7 +42,7 @@ class CatBoostScorecardConstructor:
         Args:
             model: Trained CatBoostClassifier
             pool: CatBoost Pool object used for training/validation
-            use_woe: If True, use WOE values; if False, use LeafValue
+            use_woe: If True, use WOE values; if False, use LeafValue (default: False)
             points_column: If provided, use this column for scoring
         """
         self.model = model
@@ -62,6 +62,11 @@ class CatBoostScorecardConstructor:
             "target_odds": 19,
             "precision_points": 0,
         }
+        
+        # Store original mapper and scorecard for raw/woe predictions
+        self.original_mapper: Optional[CatBoostWOEMapper] = None
+        self.original_scorecard: Optional[pd.DataFrame] = None
+        self.points_enabled = False
 
     def fit(self, model: CatBoostClassifier, pool: Pool) -> None:
         """
@@ -99,6 +104,10 @@ class CatBoostScorecardConstructor:
         # Store the scorecard and tree indices
         self.scorecard = self.scorecard_df
         self.tree_indices = sorted(self.scorecard_df["Tree"].unique())
+        
+        # Store the original objects
+        self.original_mapper = self.mapper
+        self.original_scorecard = self.scorecard_df
 
     def extract_leaf_weights(self) -> pd.DataFrame:
         """
@@ -127,9 +136,7 @@ class CatBoostScorecardConstructor:
         for idx, row in scorecard.iterrows():
             detailed_split = row.get("DetailedSplit")
             if detailed_split and pd.notna(detailed_split):
-                # Split the condition string
-                parts = str(detailed_split).split(" AND ")
-                if parts:
+                if parts := str(detailed_split).split(" AND "):
                     # Take the last condition as it's the most specific
                     last_condition = parts[-1]
 
@@ -159,16 +166,17 @@ class CatBoostScorecardConstructor:
         total_events = scorecard["Events"].sum()
         total_count = scorecard["Count"].sum()
         avg_event_rate = total_events / total_count if total_count > 0 else 0.0
+        clipped_event_rate = scorecard["EventRate"].clip(lower=1e-3, upper=1 - 1e-3)
 
         # Calculate WOE and IV
         scorecard["WOE"] = np.log(
-            (scorecard["EventRate"] / (1 - scorecard["EventRate"]))
+            (clipped_event_rate / (1 - clipped_event_rate))
             / (avg_event_rate / (1 - avg_event_rate))
-        )
+        ).fillna(0)
         scorecard["IV"] = (scorecard["EventRate"] - avg_event_rate) * scorecard["WOE"]
 
         # Calculate CountPct
-        scorecard["CountPct"] = (scorecard["Count"] / total_count * 100).fillna(0.0)
+        scorecard["CountPct"] = (scorecard["Count"] / total_count).fillna(0.0)
 
         # Return only the basic columns
         return scorecard[
@@ -178,16 +186,15 @@ class CatBoostScorecardConstructor:
                 "Feature",
                 "Sign",
                 "Split",
+                "CountPct",
                 "Count",
                 "NonEvents",
                 "Events",
                 "EventRate",
+                "LeafValue",
                 "WOE",
                 "IV",
-                "CountPct",
                 "DetailedSplit",
-                "LeafValue",
-                "Conditions",
             ]
         ]
 
@@ -237,21 +244,30 @@ class CatBoostScorecardConstructor:
             self.construct_scorecard()
 
         # For points-based scoring, ensure we have points
-        if method == "pdo" and "Points" not in self.scorecard.columns:
+        if method == "pdo" and not self.points_enabled:
             self.create_points()
 
-        # Set the appropriate value column based on method
-        if method == "raw":
-            self.mapper.value_column = "LeafValue"
-            self.mapper.use_woe = False
-        elif method == "woe":
-            self.mapper.value_column = "WOE"
-            self.mapper.use_woe = True
+        if method == "raw" or method == "woe":
+            # Use original mapper for raw and woe methods if available
+            original_mapper = self.original_mapper if self.points_enabled else self.mapper
+
+            # Set the appropriate value column based on method
+            if method == "raw":
+                original_mapper.value_column = "LeafValue"
+                original_mapper.use_woe = False
+            else:
+                original_mapper.value_column = "WOE"
+                original_mapper.use_woe = True
+
+            scores = original_mapper.predict_score(features)
         elif method == "pdo":
+            # Use current mapper for points method
             self.mapper.value_column = "Points"
             self.mapper.use_woe = False
+            scores = self.mapper.predict_score(features)
+        else:
+            raise ValueError(f"Unknown method: {method}")
 
-        scores = self.mapper.predict_score(features)
         return pd.Series(scores) if isinstance(scores, (float, np.ndarray)) else scores
 
     def transform(self, features: Union[pd.DataFrame, Dict[str, Any]]) -> pd.DataFrame:
@@ -349,27 +365,55 @@ class CatBoostScorecardConstructor:
         Returns:
             DataFrame containing the scorecard with points
         """
+        # Store original mapper and scorecard if not already stored
+        if not self.points_enabled:
+            self.original_mapper = self.mapper
+            self.original_scorecard = self.scorecard.copy() if self.scorecard is not None else None
+        
         # First get the base scorecard
         scorecard = self.construct_scorecard().copy()
-
-        # Calculate factor and offset for PDO scaling
+        
+        # Always use WOE for points calculation to ensure sufficient variance
+        value_col = "WOE"
+        
+        # Base score from average event rate if available
+        if "EventRate" in scorecard.columns:
+            base_odds = scorecard["EventRate"].mean() / (1 - scorecard["EventRate"].mean())
+        else:
+            base_odds = target_odds  # fallback
+            
+        # Factor and Offset
         factor = pdo / np.log(2)
-        offset = target_points - factor * np.log(target_odds)
+        offset = target_points - factor * np.log(base_odds)
 
-        # Calculate points based on WOE
-        scorecard["Points"] = (factor * scorecard["WOE"] + offset).round(precision_points)
+        # Raw contribution score from WOE or LeafValue
+        scorecard["RawScore"] = -factor * scorecard[value_col]
 
-        # Handle NaN and infinite values
-        scorecard["Points"] = scorecard["Points"].replace([np.inf, -np.inf], np.nan)
-        scorecard["Points"] = scorecard["Points"].fillna(0)  # Replace NaN with 0
+        n_trees = len(scorecard["Tree"].unique())
+        scorecard["RawScore"] = -factor * scorecard[value_col]
+        scorecard["RawScore"] /= n_trees  # Normalize by number of trees
 
+        # Align maximum score within each tree
+        scorecard.set_index("Tree", inplace=True)
+        tree_max = scorecard.groupby("Tree")["RawScore"].max()
+        mean_shift = (tree_max.sum() - offset) / len(tree_max)
+
+        # Calculate points using apply
+        scorecard["Points"] = scorecard.apply(
+            lambda row: tree_max[row.name] - row["RawScore"] - mean_shift, 
+            axis=1
+        )
+        scorecard.reset_index(inplace=True)
+
+        # Apply rounding
+        scorecard["Points"] = scorecard["Points"].round(precision_points)
         if precision_points <= 0:
             scorecard["Points"] = scorecard["Points"].astype(int)
-
+        
         # Store the updated scorecard
         self.scorecard = scorecard
         self.scorecard_df = scorecard
-
+        
         # Update mapper with the new scorecard that includes Points
         self.mapper = CatBoostWOEMapper(
             scorecard,
@@ -380,7 +424,10 @@ class CatBoostScorecardConstructor:
         self.mapper.enhanced_scorecard = scorecard  # Store enhanced scorecard
         self.mapper.generate_feature_mappings()
         self.mapper.calculate_feature_importance()
-
+        
+        # Mark that points have been created
+        self.points_enabled = True
+        
         return scorecard
 
     def predict_scores(self, features: Union[pd.DataFrame, Dict[str, Any]]) -> pd.DataFrame:
@@ -413,13 +460,13 @@ class CatBoostScorecardConstructor:
         scores_df["Score"] = scores_df.sum(axis=1)
         return scores_df
 
-    def generate_sql_query(self, table_name="my_table"):
+    def generate_sql_query(self):
         """
         Generate an SQL query for deploying the scorecard.
 
         Parameters
         ----------
-        table_name : str, optional (default="my_table")
+        table_name : str, optional (default="input_data")
             The name of the table to query from.
 
         Returns
@@ -427,49 +474,8 @@ class CatBoostScorecardConstructor:
         str
             The SQL query string.
         """
-        if self.scorecard_df is None:
-            raise ValueError("Scorecard not constructed. Call construct_scorecard() first.")
-
-        # Add scorecard data as VALUES
-        values = []
-        values.extend(
-            f"    SELECT {row['Tree']} AS Tree, {row.get('Node', 0)} AS Node, {row.get('XAddEvidence', 0)} AS XAddEvidence, {row.get('Points', 0)} AS Points"
-            for _, row in self.scorecard_df.iterrows()
-        )
-        cte_parts = [
-            "WITH scorecard AS (",
-            "  SELECT",
-            "    Tree,",
-            "    Node,",
-            "    XAddEvidence,",
-            "    Points",
-            "  FROM (",
-            *["    " + "\n    UNION ALL\n".join(values), "  ) AS sc_data", ")"],
-        ]
-        # Main query
-        query_parts = [
-            "\nSELECT",
-            "  t.*,",
-            "  SUM(sc.Points) AS Score",
-            f"FROM {table_name} t",
-            "LEFT JOIN scorecard sc ON 1=1",
-        ]
-
-        # Add conditions for each tree and node
-        conditions = []
-        conditions.extend(
-            "  AND ((t.Tree = sc.Tree AND t.Node = sc.Node) OR (sc.Tree != t.Tree))"
-            for tree in self.scorecard_df["Tree"].unique()
-        )
-        query_parts.extend(conditions)
-
-        # Group by all columns from the original table
-        query_parts.extend(["GROUP BY", "  t.*"])
-
-        # Combine all parts
-        sql_query = "\n".join(cte_parts + query_parts)
-        self._sql_query = sql_query
-        return sql_query
+       
+        return ...
 
     @property
     def sql_query(self):
@@ -481,9 +487,7 @@ class CatBoostScorecardConstructor:
         str
             The SQL query string.
         """
-        if self._sql_query is None:
-            self._sql_query = self.generate_sql_query()
-        return self._sql_query
+        return ...
 
     def predict(
         self, features: Union[pd.DataFrame, Dict[str, Any]], method: str = "raw"

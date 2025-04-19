@@ -216,11 +216,12 @@ class CatBoostScorecard:
                 if conditions:
                     # Try to extract feature and split info from the first condition
                     first_cond = conditions.split(" AND ")[0]
-                    match = re.match(r"([^<>=!]+)\s*([<>=!]+)\s*(.+)", first_cond)
-                    if match:
-                        feature = match.group(1).strip()
-                        sign = match.group(2).strip()
-                        split = match.group(3).strip()
+                    if match := re.match(
+                        r"([^<>=!]+)\s*([<>=!]+)\s*(.+)", first_cond
+                    ):
+                        feature = match[1].strip()
+                        sign = match[2].strip()
+                        split = match[3].strip()
 
                 leaf_records.append(
                     {
@@ -294,12 +295,14 @@ class CatBoostScorecard:
         scorecard_df["WOE"] = np.where(is_balanced, 0.0, woe_raw)
 
         # Handle infinities / NaNs
-        scorecard_df["WOE"] = scorecard_df["WOE"].replace([np.inf, -np.inf], 0.0).fillna(0.0)
+        scorecard_df["WOE"] = (
+            scorecard_df["WOE"].replace([np.inf, -np.inf], 0.0).fillna(0.0)
+        ).round(4)
 
         # Calculate IV
         scorecard_df["IV"] = (
             scorecard_df["WOE"] * (scorecard_df["EventRate"] - avg_event_rate)
-        ).fillna(0.0)
+        ).fillna(0.0).round(4)
 
         # Calculate xAddEvidence
         scorecard_df["xAddEvidence"] = scorecard_df["LeafValue"]
@@ -307,10 +310,6 @@ class CatBoostScorecard:
         # Calculate CountPct
         total_count = scorecard_df["Count"].sum()
         scorecard_df["CountPct"] = (scorecard_df["Count"] / total_count * 100).fillna(0.0)
-
-        # Add RawScore and Points columns
-        scorecard_df["RawScore"] = scorecard_df["LeafValue"]
-        scorecard_df["Points"] = scorecard_df["LeafValue"]
 
         # Add DetailedSplit column as a copy of Conditions
         scorecard_df["DetailedSplit"] = scorecard_df["Conditions"]
@@ -325,6 +324,7 @@ class CatBoostScorecard:
                 "Feature",
                 "Sign",
                 "Split",
+                "CountPct",
                 "Count",
                 "NonEvents",
                 "Events",
@@ -333,11 +333,7 @@ class CatBoostScorecard:
                 "WOE",
                 "IV",
                 "xAddEvidence",
-                "CountPct",
-                "Conditions",
                 "DetailedSplit",
-                "RawScore",
-                "Points",
             ]
         ]
 

@@ -58,7 +58,7 @@ def test_initialization(scorecard_df):
     """Test initialization of CatBoostWOEMapper."""
     mapper = CatBoostWOEMapper(scorecard_df)
     assert hasattr(mapper, "scorecard")
-    assert mapper.use_woe is True
+    assert mapper.use_woe is False
     assert mapper.points_column is None
     assert hasattr(mapper, "feature_mappings")
     assert hasattr(mapper, "feature_importance")
@@ -165,19 +165,19 @@ def test_get_binned_feature_table(woe_mapper):
     assert isinstance(table, pd.DataFrame)
     assert not table.empty
 
-    required_columns = {"Feature", "Condition", "WOE", "Weight", "TreeCount"}
+    required_columns = {"Feature", "Condition", "LeafValue", "Weight", "TreeCount"}
     assert set(table.columns) >= required_columns
 
     assert table["Feature"].dtype == object
     assert table["Condition"].dtype == object
-    assert table["WOE"].dtype == np.float64
+    assert table["LeafValue"].dtype == np.float64
     assert table["Weight"].dtype == np.float64
     assert table["TreeCount"].dtype == np.int64
 
 
 def test_get_value_column(woe_mapper):
     """Test the get_value_column method."""
-    assert woe_mapper.get_value_column() == "WOE"
+    assert woe_mapper.get_value_column() == "LeafValue"
 
     woe_mapper.points_column = "Points"
     assert woe_mapper.get_value_column() == "Points"

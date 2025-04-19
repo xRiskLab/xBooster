@@ -6,6 +6,7 @@ __pycache__
 .pytest_cache
 .mypy_cache
 *.pyc
+*.pkl
 *.pyo
 *.pyd
 .venv
@@ -14,5 +15,9 @@ __pycache__
 catboost_info
 .catboost_info
 .vscode
+dist
+xbooster.egg-info
 tmp
 python-workspace.code-workspace
+examples/*.sql
+examples/*.py
