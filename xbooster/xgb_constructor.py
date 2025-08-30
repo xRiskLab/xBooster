@@ -747,3 +747,192 @@ class XGBScorecardConstructor:  # pylint: disable=R0902
         final_query += "FROM scorecard"
 
         return final_query
+
+    def construct_scorecard_by_intervals(self, add_stats=True) -> pd.DataFrame:
+        """
+        Constructs a scorecard grouped by intervals of the type [a, b) based on the scorecard constructed with points added.
+        """
+        # Value checks
+        if self.xgb_scorecard_with_points is None:
+            raise ValueError("This method requires first having computed a scorecard with points.")
+        if self.max_depth > 1:
+            raise ValueError(
+                "A scorecard by intervals can currently only be constructed for xgboost models with tree learners of depth one."
+            )
+
+        # Inner functions
+        def bin_to_str(bin):
+            """Transform bins to have shape [a, b) or (-inf, b)"""
+            str_bin = str(bin)
+            if bin[0] != -np.inf:
+                str_bin = "[" + str_bin[1:]
+            return str_bin
+
+        def sum_across_decision_rules(attr, left, left_nodes, right_nodes) -> float:
+            return (
+                left_nodes.loc[left < left_nodes.Split, attr].sum()
+                + right_nodes.loc[left >= right_nodes.Split, attr].sum()
+            )
+
+        xgb_sc_with_points = self.xgb_scorecard_with_points
+        features = xgb_sc_with_points.Feature.unique()
+        list_scorecard_intv = []
+
+        for feat in features:
+            sc_feat = xgb_sc_with_points.loc[xgb_sc_with_points.Feature == feat]
+
+            # Get cutoff points, build intervals for feature
+            cutoffs = np.sort(sc_feat.Split.unique())
+            bins = zip([-np.inf, *cutoffs], [*cutoffs, np.inf])
+
+            # Split decision rules depending on sign
+            left_drs = sc_feat.loc[sc_feat.Sign == "<"]
+            right_drs = sc_feat.loc[sc_feat.Sign == ">="]
+
+            # For each interval, add points across decision rules
+            data_scorecard_intv = []
+            for bin in bins:
+                left, right = bin
+                row_bin = {"Bin": bin_to_str(bin), "Left": left, "Right": right}
+                row_bin["Points"] = sum_across_decision_rules("Points", left, left_drs, right_drs)
+                row_bin["XAddEvidence"] = sum_across_decision_rules(
+                    "XAddEvidence", left, left_drs, right_drs
+                )
+                data_scorecard_intv.append(row_bin)
+            scorecard_intv = pd.DataFrame(data_scorecard_intv)
+
+            # Add points for Missing
+            if hasattr(sc_feat, "DetailedSplit"):
+                mask_nodes_with_missing = sc_feat.DetailedSplit.str.contains("missing", na=False)
+                if mask_nodes_with_missing.sum():
+                    points_missing = sc_feat.loc[mask_nodes_with_missing, "Points"].sum()
+                    logit_missing = sc_feat.loc[mask_nodes_with_missing, "XAddEvidence"].sum()
+
+                    # if there is any bin that has same points as missing, add missing to bin
+                    missing_in_bin = scorecard_intv.Points == points_missing
+                    if missing_in_bin.sum():
+                        scorecard_intv.loc[scorecard_intv.Points == points_missing, "Bin"] += (
+                            ", Missing"
+                        )
+                    # else, add separate category for missing
+                    else:
+                        missing_row = {
+                            "Bin": "Missing",
+                            "Left": np.nan,
+                            "Right": np.nan,
+                            "Points": points_missing,
+                            "XAddEvidence": logit_missing,
+                        }
+                        scorecard_intv = pd.concat(
+                            [scorecard_intv, pd.DataFrame([missing_row])], ignore_index=True
+                        )
+                # If missing not used in model, add as row with NA
+                else:
+                    missing_row = {
+                        "Bin": "Missing",
+                        "Left": np.nan,
+                        "Right": np.nan,
+                        "Points": np.nan,
+                        "XAddEvidence": np.nan,
+                    }
+                    scorecard_intv = pd.concat(
+                        [scorecard_intv, pd.DataFrame([missing_row])], ignore_index=True
+                    )
+
+            # Feature column
+            scorecard_intv["Feature"] = feat
+            # reorder columns, feature first
+            scorecard_intv = scorecard_intv[["Feature"] + scorecard_intv.columns.tolist()[:-1]]
+
+            # Append to list of scorecards by intervals
+            list_scorecard_intv.append(scorecard_intv)
+
+        self.xgb_scorecard_intv = pd.concat(list_scorecard_intv, axis=0, ignore_index=True)
+
+        if not add_stats:
+            return self.xgb_scorecard_intv
+
+        def query_count(
+            data: pd.DataFrame, feat: str, left: float, right: float, count_missing: bool
+        ) -> int:
+            count = ((data[feat] >= left) & (data[feat] < right)).sum()
+            if count_missing:
+                count += data[feat].isna().sum()
+            return count
+
+        self.xgb_scorecard_intv["Count"] = np.nan
+        self.xgb_scorecard_intv["Events"] = np.nan
+        self.xgb_scorecard_intv["NonEvents"] = np.nan
+        X_event = self.X.loc[self.y == 1]
+        X_nonevent = self.X.loc[self.y == 0]
+        for bin in self.xgb_scorecard_intv.itertuples():
+            has_missing = "Missing" in bin.Bin
+            self.xgb_scorecard_intv.loc[bin.Index, "Count"] = query_count(
+                self.X, bin.Feature, bin.Left, bin.Right, has_missing
+            )
+            self.xgb_scorecard_intv.loc[bin.Index, "Events"] = query_count(
+                X_event, bin.Feature, bin.Left, bin.Right, has_missing
+            )
+            self.xgb_scorecard_intv.loc[bin.Index, "NonEvents"] = query_count(
+                X_nonevent, bin.Feature, bin.Left, bin.Right, has_missing
+            )
+
+        # Add 'CountPct as proportion of total observations
+        n = self.X.shape[0]
+        self.xgb_scorecard_intv["CountPct"] = self.xgb_scorecard_intv["Count"] / n
+
+        # Get WOE and IV scores - manually calculate for interval scorecard since it doesn't have Tree column
+        # Calculate cumulative totals across all intervals
+        total_events = self.xgb_scorecard_intv["Events"].sum()
+        total_nonevents = self.xgb_scorecard_intv["NonEvents"].sum()
+
+        # Calculate WOE for each interval
+        self.xgb_scorecard_intv["CumEvents"] = total_events
+        self.xgb_scorecard_intv["CumNonEvents"] = total_nonevents
+
+        # Calculate WOE using the same formula as the original function
+        self.xgb_scorecard_intv["WOE"] = np.log(
+            np.where(
+                (self.xgb_scorecard_intv["NonEvents"] != 0)
+                & (self.xgb_scorecard_intv["Events"] != 0),
+                (self.xgb_scorecard_intv["Events"] / total_events)
+                / (self.xgb_scorecard_intv["NonEvents"] / total_nonevents),
+                ((self.xgb_scorecard_intv["Events"] + 0.5) / total_events)
+                / ((self.xgb_scorecard_intv["NonEvents"] + 0.5) / total_nonevents),
+            )
+        ).astype(float)
+
+        # Calculate IV
+        self.xgb_scorecard_intv["IV"] = self.xgb_scorecard_intv["WOE"] * (
+            self.xgb_scorecard_intv["Events"] / total_events
+            - self.xgb_scorecard_intv["NonEvents"] / total_nonevents
+        )
+
+        # Drop temporary columns
+        self.xgb_scorecard_intv.drop(columns=["CumEvents", "CumNonEvents"], inplace=True)
+
+        return self.xgb_scorecard_intv
+
+    def create_points_peo_pdo(
+        self, peo: int, pdo: int, precision_points: int = 0, scorecard: pd.DataFrame = None
+    ) -> pd.DataFrame:
+        """
+        Creates a column with points ('Points_PEO_PDO') on a scorecard by intervals
+        """
+        if scorecard is None:
+            scorecard = self.xgb_scorecard_intv.copy()
+        n_feats = len(scorecard["Feature"].unique())
+
+        # Adjust XAddEvidence, obtain Logit Contribution = BS/n_feats + Logit Contrib
+        scorecard["LogitContrib"] = scorecard["XAddEvidence"] + logit(self.base_score) / n_feats
+
+        # Transform logit contribution into points
+        factor = -pdo / np.log(2)
+        offset = peo
+        scorecard["Points_PEO_PDO"] = offset / n_feats + factor * scorecard["LogitContrib"]
+        scorecard["Points_PEO_PDO"] = scorecard["Points_PEO_PDO"].round(precision_points)
+
+        # Drop logit contribution column
+        scorecard.drop(columns="LogitContrib", inplace=True)
+
+        return scorecard
