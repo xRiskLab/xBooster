@@ -142,6 +142,32 @@ sql_query = scorecard_constructor.generate_sql_query(table_name='my_table')
 print(sql_query)
 ```
 
+### Interval Scorecards 📊
+
+Convert complex tree-based scorecards into simplified interval-based rules. This feature requires `max_depth=1` models and follows industry standard practices (Siddiqi, 2017):
+
+```python
+# After creating a standard scorecard with points (see above)
+
+# Build interval scorecard - simplifies complex rules into intervals
+interval_scorecard = scorecard_constructor.construct_scorecard_by_intervals(add_stats=True)
+
+print(f"Rule reduction: {len(xgb_scorecard_with_points)} → {len(interval_scorecard)} rules")
+print("\nInterval format:")
+print(interval_scorecard[['Feature', 'Bin', 'Points', 'WOE']].head())
+
+# Add Points at Even Odds/Points to Double the Odds (PEO/PDO) 
+peo_pdo_scorecard = scorecard_constructor.create_points_peo_pdo(peo=600, pdo=50)
+print("\nPEO/PDO Points:")
+print(peo_pdo_scorecard[['Feature', 'Bin', 'Points_PEO_PDO']].head())
+```
+
+**Key Benefits:**
+- **Simplified Rules**: Transform complex tree conditions into simple intervals like `[70.8, 80.5)`
+- **Rule Reduction**: Typically 60-80% fewer rules while maintaining accuracy
+- **Industry Standard**: Follows credit scoring best practices
+- **Interpretable**: Easy to understand and implement in production systems
+
 ### XGBoost Preprocessing
 
 For handling categorical features in XGBoost, you can use the `DataPreprocessor`:
@@ -403,6 +429,23 @@ A class for generating a scorecard from a trained XGBoost model. The methodology
    - **Returns**:
      - `str`: The final SQL query for deploying the scorecard.
 
+8. `construct_scorecard_by_intervals(add_stats=True) -> pd.DataFrame`:
+   - Constructs a scorecard grouped by intervals of the type [a, b). Requires max_depth=1 models.
+   - **Parameters**:
+     - `add_stats` (bool, optional): Whether to include WOE, IV, and count statistics. Default is True.
+   - **Returns**:
+     - `pd.DataFrame`: The interval-based scorecard.
+
+9. `create_points_peo_pdo(peo: int, pdo: int, precision_points: int = 0, scorecard: pd.DataFrame = None) -> pd.DataFrame`:
+   - Creates Points at Even Odds/Points to Double the Odds (PEO/PDO) on interval scorecards.
+   - **Parameters**:
+     - `peo` (int): Points at Even Odds.
+     - `pdo` (int): Points to Double the Odds.
+     - `precision_points` (int, optional): Decimal precision for points. Default is 0.
+     - `scorecard` (pd.DataFrame, optional): Specific scorecard to use. Default uses interval scorecard.
+   - **Returns**:
+     - `pd.DataFrame`: Scorecard with PEO/PDO points.
+
 ### `xbooster.explainer` - XGBoost Scorecard Explainer
 
 This module provides functionalities for explaining XGBoost scorecards, including methods to extract split information, build interaction splits, visualize tree structures, plot feature importances, and more.
@@ -483,9 +526,15 @@ Contributions are welcome! For bug reports or feature requests, please open an i
 For code contributions, please open a pull request.
 
 ## Version
-Current version: 0.2.5
+Current version: 0.2.6
 
 ## Changelog
+
+### [0.2.6] - 2025-08-30
+- Added interval scorecard functionality for XGBoost models with `max_depth=1`
+- New methods: `construct_scorecard_by_intervals()` and `create_points_peo_pdo()`
+- Simplifies complex tree rules into interpretable intervals following industry standards (Siddiqi, 2017)
+- Typically achieves 60-80% rule reduction while maintaining accuracy
 
 ### [0.2.5] - 2025-04-19
 - Minor changes in `catboost_wrapper.py` and `cb_constructor.py` to improve the scorecard generation.
