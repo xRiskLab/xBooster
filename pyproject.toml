@@ -1,6 +1,6 @@
 [project]
 name = "xbooster"
-version = "0.2.6"
+version = "0.2.6.post1"
 description = "Explainable Boosted Scoring"
 authors = [
     {name = "xRiskLab", email = "contact@xrisklab.ai"}
@@ -26,7 +26,7 @@ dependencies = [
     "scikit-learn>=1.3.0,<2.0.0",
     "shap>=0.44.0,<1.0.0",
     "catboost>=1.2.7,<2.0.0",
-    "xgboost>=2.0.0,<3.0.0",
+    "xgboost>=2.0.0,<4.0.0",
     "pyarrow>=19.0.1,<20.0.0",
 ]
 [project.urls]
@@ -43,6 +43,7 @@ dev = [
     "ruff>=0.11.2",
     "nbconvert>=7.16.6",
     "pandas-stubs>=2.2.3",
+    "prek>=0.2.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -74,6 +75,15 @@ pythonpath = ["xbooster"]
 
 [tool.pylint.'MESSAGES CONTROL']
 disable = ["C0413", "C0103", "E0213"]
+
+[tool.pylint.basic]
+# Allow single letter variable names (common in ML: X, y)
+good-names = ["i", "j", "k", "ex", "Run", "_", "X", "y"]
+# Add the virtual environment to Python path
+init-hook = "import sys, os; sys.path.insert(0, os.path.join(os.getcwd(), '.venv', 'lib', 'python3.10', 'site-packages'))"
+
+[tool.pylint.format]
+max-line-length = 88
 
 [[tool.uv.index]]
 name = "testpypi"

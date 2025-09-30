@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - python-version: '3.11'
+            xgboost-version: '2.1.4'
+            test-name: 'xgboost-2.x'
+          - python-version: '3.11'
+            xgboost-version: '3.0.5'
+            test-name: 'xgboost-3.x'
+          - python-version: '3.10'
+            xgboost-version: 'latest'
+            test-name: 'xgboost-latest'
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v1
+      with:
+        version: "latest"
+
+    - name: Cache uv
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/uv
+        key: ${{ runner.os }}-uv-${{ matrix.python-version }}-${{ matrix.xgboost-version }}-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-uv-${{ matrix.python-version }}-
+          ${{ runner.os }}-uv-
+
+    - name: Install dependencies
+      run: |
+        uv sync --dev
+        uv add "xgboost==${{ matrix.xgboost-version }}"
+
+    - name: Run tests
+      run: |
+        echo "Testing with XGBoost ${{ matrix.xgboost-version }}"
+        uv run python -c "import xgboost as xgb; print(f'XGBoost version: {xgb.__version__}')"
+        uv run python -m pytest tests/ -v --tb=short
+
+    # Coverage reporting disabled until pytest-cov is added to dependencies
+    # - name: Upload coverage to Codecov
+    #   if: matrix.python-version == '3.11'
+    #   uses: codecov/codecov-action@v3
+    #   with:
+    #     file: ./coverage.xml
+    #     flags: unittests
+    #     name: codecov-umbrella
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v1
+      with:
+        version: "latest"
+
+    - name: Install dependencies
+      run: |
+        uv sync --dev
+
+    - name: Run ruff
+      run: |
+        uv run ruff check xbooster/ tests/
+
+    - name: Run ruff format check
+      run: |
+        uv run ruff format --check xbooster/ tests/
+
+  type-check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v1
+      with:
+        version: "latest"
+
+    - name: Install dependencies
+      run: |
+        uv sync --dev
+
+    - name: Run mypy (if configured)
+      run: |
+        # Add mypy configuration and uncomment when ready
+        # uv run mypy xbooster/
+        echo "Type checking skipped - configure mypy when ready"

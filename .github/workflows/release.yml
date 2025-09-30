@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.0)'
+        required: true
+        type: string
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v1
+      with:
+        version: "latest"
+
+    - name: Install dependencies
+      run: |
+        uv sync --dev
+
+    - name: Run tests
+      run: |
+        uv run python -m pytest tests/ -v
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v1
+      with:
+        version: "latest"
+
+    - name: Install build dependencies
+      run: |
+        uv tool install build
+
+    - name: Build package
+      run: |
+        uv tool run --from build pyproject-build
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: dist
+        path: dist/
+
+  # publish:
+  #   needs: build
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     id-token: write  # IMPORTANT: this permission is mandatory for trusted publishing
+  #   steps:
+  #   - name: Download build artifacts
+  #     uses: actions/download-artifact@v4
+  #     with:
+  #       name: dist
+  #       path: dist/
+  #
+  #   - name: Publish to PyPI
+  #     uses: pypa/gh-action-pypi-publish@release/v1
+  #     # Uncomment when ready to publish to PyPI
+  #     # with:
+  #     #   password: ${{ secrets.PYPI_API_TOKEN }}
+  #     # Or use trusted publishing (recommended):
+  #     # with:
+  #     #   repository-url: https://upload.pypi.org/legacy/
+
+  # create-release:
+  #   needs: build
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     contents: write
+  #   steps:
+  #   - uses: actions/checkout@v4
+  #     with:
+  #       fetch-depth: 0
+
+  #   - name: Create GitHub Release
+  #     uses: ncipollo/release-action@v1
+  #     with:
+  #       tag: ${{ github.ref_name }}
+  #       name: Release ${{ github.ref_name }}
+  #       body: |
+  #         ## Changes
+
+  #         - See [CHANGELOG.md](CHANGELOG.md) for detailed changes
+
+  #         ## Installation
+
+  #         ```bash
+  #         pip install fastwoe==${{ github.ref_name }}
+  #         ```
+  #       draft: false
+  #       prerelease: false
+  #       token: ${{ secrets.GITHUB_TOKEN }}

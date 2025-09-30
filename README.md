@@ -525,40 +525,8 @@ Contributions are welcome! For bug reports or feature requests, please open an i
 
 For code contributions, please open a pull request.
 
-## Version
-Current version: 0.2.6
-
-## Changelog
-
-### [0.2.6] - 2025-08-30
-- Added interval scorecard functionality for XGBoost models with `max_depth=1`
-- New methods: `construct_scorecard_by_intervals()` and `create_points_peo_pdo()`
-- Simplifies complex tree rules into interpretable intervals following industry standards (Siddiqi, 2017)
-- Typically achieves 60-80% rule reduction while maintaining accuracy
-
-### [0.2.5] - 2025-04-19
-- Minor changes in `catboost_wrapper.py` and `cb_constructor.py` to improve the scorecard generation.
-
-### [0.2.4] - 2025-04-18
-- Changed the build distribution in pyproject.toml.
-
-### [0.2.3] - 2025-04-18
-- Added support for CatBoost classification models and switch to `uv` for packaging.
-- Python version requirement updated to 3.10-3.11.
-
-### [0.2.2] - 2024-05-08
-- Updates in `explainer.py` module to improve kwargs handling and minor changes.
-
-### [0.2.1] - 2024-05-03
-- Updates of dependencies
-
-### [0.2.0] - 2024-05-03
-- Added tree visualization class (`explainer.py`)
-- Updated the local explanation algorithm for models with a depth > 1 (`explainer.py`)
-- Added a categorical preprocessor (`_utils.py`)
-
-### [0.1.0] - 2024-02-14
-- Initial release
+## Changelog 📝
+For a changelog, see [CHANGELOG](CHANGELOG.md).
 
 ## License 📄
 This project is licensed under the MIT License - see the LICENSE file for details.

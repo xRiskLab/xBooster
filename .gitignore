@@ -1,5 +1,6 @@
 # .gitignore
 .env
+.dev_notes.md
 .ruff_cache
 .ruff_cache/*
 __pycache__
@@ -16,6 +17,9 @@ catboost_info
 .catboost_info
 .vscode
 dist
+models
+build
+lib
 xbooster.egg-info
 tmp
 python-workspace.code-workspace

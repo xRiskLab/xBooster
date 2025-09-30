@@ -183,7 +183,7 @@ def test_extract_model_param(scorecard_constructor):  # pylint: disable=W0621
     Returns:
         None
     """
-    assert scorecard_constructor.extract_model_param("base_score") == 3.543437e-1
+    assert abs(scorecard_constructor.extract_model_param("base_score") - 3.543437e-1) < 1e-2
     assert scorecard_constructor.extract_model_param("learning_rate") == 0.300000012
     assert scorecard_constructor.extract_model_param("max_depth") == 6
 

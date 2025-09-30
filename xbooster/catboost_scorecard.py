@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
-import pyarrow as pa
+import pyarrow as pa  # pylint: disable=import-error
 from catboost import CatBoostClassifier, Pool  # pylint: disable=import-error
 
 
@@ -216,9 +216,7 @@ class CatBoostScorecard:
                 if conditions:
                     # Try to extract feature and split info from the first condition
                     first_cond = conditions.split(" AND ")[0]
-                    if match := re.match(
-                        r"([^<>=!]+)\s*([<>=!]+)\s*(.+)", first_cond
-                    ):
+                    if match := re.match(r"([^<>=!]+)\s*([<>=!]+)\s*(.+)", first_cond):
                         feature = match[1].strip()
                         sign = match[2].strip()
                         split = match[3].strip()
@@ -301,8 +299,10 @@ class CatBoostScorecard:
 
         # Calculate IV
         scorecard_df["IV"] = (
-            scorecard_df["WOE"] * (scorecard_df["EventRate"] - avg_event_rate)
-        ).fillna(0.0).round(4)
+            (scorecard_df["WOE"] * (scorecard_df["EventRate"] - avg_event_rate))
+            .fillna(0.0)
+            .round(4)
+        )
 
         # Calculate xAddEvidence
         scorecard_df["xAddEvidence"] = scorecard_df["LeafValue"]
