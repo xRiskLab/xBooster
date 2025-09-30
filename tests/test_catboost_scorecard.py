@@ -82,7 +82,7 @@ def test_trees_to_scorecard(trained_model: CatBoostClassifier, test_pool: Pool):
     assert scorecard["IV"].dtype == np.float64
     assert scorecard["xAddEvidence"].dtype == np.float64
     assert scorecard["CountPct"].dtype == np.float64
-    
+
     # Check for valid values
     assert scorecard["Count"].min() >= 0
     assert scorecard["NonEvents"].min() >= 0

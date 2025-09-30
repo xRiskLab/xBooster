@@ -97,9 +97,9 @@ We can also visualize the score distribution between the events of interest.
 from xbooster import explainer
 
 explainer.plot_score_distribution(
-    y_test, 
+    y_test,
     credit_scores,
-    num_bins=30, 
+    num_bins=30,
     figsize=(8, 3),
     dpi=100
 )
@@ -156,7 +156,7 @@ print(f"Rule reduction: {len(xgb_scorecard_with_points)} → {len(interval_score
 print("\nInterval format:")
 print(interval_scorecard[['Feature', 'Bin', 'Points', 'WOE']].head())
 
-# Add Points at Even Odds/Points to Double the Odds (PEO/PDO) 
+# Add Points at Even Odds/Points to Double the Odds (PEO/PDO)
 peo_pdo_scorecard = scorecard_constructor.create_points_peo_pdo(peo=600, pdo=50)
 print("\nPEO/PDO Points:")
 print(peo_pdo_scorecard[['Feature', 'Bin', 'Points_PEO_PDO']].head())
@@ -194,8 +194,8 @@ target = "Loan_Status"
 
 # Initialize preprocessor
 preprocessor = DataPreprocessor(
-    numerical_features, 
-    categorical_features, 
+    numerical_features,
+    categorical_features,
     target
 )
 
@@ -204,7 +204,7 @@ X, y = preprocessor.fit_transform(dataset)
 
 # Get one-hot encoded feature names
 features_ohe = [
-    col for col in X.columns 
+    col for col in X.columns
     if col not in numerical_features
 ]
 
@@ -281,9 +281,9 @@ woe_scores = constructor.predict_score(X, method="woe")
 
 # Now create points for the scorecard
 scorecard_with_points = constructor.create_points(
-    pdo=50, 
-    target_points=600, 
-    target_odds=19, 
+    pdo=50,
+    target_points=600,
+    target_odds=19,
     precision_points=0
 )
 

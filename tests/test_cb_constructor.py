@@ -355,6 +355,7 @@ def test_predict_scores(scorecard_constructor, X_test):
     assert len(scores) == len(X_test)
     assert "Score" in scores.columns
 
+
 def test_woe_mapper_and_gini_scores(credit_data, credit_model):
     """
     Test the WOE mapper functionality and Gini score comparisons.
@@ -579,7 +580,7 @@ def test_feature_importance_and_multiple_create_points(credit_data, credit_model
     """
     Test the feature importance calculation with the updated approach and
     verify that create_points can be called multiple times without errors.
-    
+
     This test:
     1. Constructs a scorecard
     2. Checks feature importance calculation
@@ -592,52 +593,52 @@ def test_feature_importance_and_multiple_create_points(credit_data, credit_model
 
     # Create and fit the scorecard constructor
     constructor = CatBoostScorecardConstructor(model, pool)
-    
+
     # Construct scorecard
     scorecard = constructor.construct_scorecard()
     assert isinstance(scorecard, pd.DataFrame)
     assert not scorecard.empty
     assert "WOE" in scorecard.columns
-    
+
     # Get feature importance before creating points
     feature_importance_before = constructor.get_feature_importance()
     assert isinstance(feature_importance_before, dict)
     assert len(feature_importance_before) > 0
-    
+
     # Verify feature importance calculation uses WOE values
     # The importance should be a normalized value between 0 and 1
     assert all(0 <= v <= 1 for v in feature_importance_before.values())
     assert abs(sum(feature_importance_before.values()) - 1.0) < 1e-10
-    
+
     # Get predictions before creating points
     raw_scores_before = constructor.predict_score(X, method="raw")
-    woe_scores_before = constructor.predict_score(X, method="woe")
-    
+    # woe_scores_before = constructor.predict_score(X, method="woe")  # Not used in test
+
     # Get CatBoost raw predictions to compare
     cb_preds = model.predict(X, prediction_type="RawFormulaVal")
-    
+
     # Verify that raw scores match CatBoost predictions
     np.testing.assert_allclose(raw_scores_before, cb_preds, rtol=1e-2, atol=1e-2)
-    
+
     # Create points for the first time
     points_scorecard = constructor.create_points(
         pdo=50, target_points=600, target_odds=19, precision_points=0
     )
     assert isinstance(points_scorecard, pd.DataFrame)
     assert "Points" in points_scorecard.columns
-    
+
     # Get predictions after creating points
-    points_scores = constructor.predict_score(X, method="pdo")
+    # points_scores = constructor.predict_score(X, method="pdo")  # Not used in test
     raw_scores_after = constructor.predict_score(X, method="raw")
-    woe_scores_after = constructor.predict_score(X, method="woe")
-    
+    # woe_scores_after = constructor.predict_score(X, method="woe")  # Not used in test
+
     # Verify predictions are consistent
     np.testing.assert_allclose(raw_scores_after, cb_preds, rtol=1e-2, atol=1e-2)
-    
+
     # Get feature importance after creating points
     feature_importance_after = constructor.get_feature_importance()
     assert isinstance(feature_importance_after, dict)
-    
+
     # Create points a second time - this should not fail
     try:
         points_scorecard2 = constructor.create_points(
@@ -645,27 +646,26 @@ def test_feature_importance_and_multiple_create_points(credit_data, credit_model
         )
         assert isinstance(points_scorecard2, pd.DataFrame)
         assert "Points" in points_scorecard2.columns
-        
+
         # The points values should be different with the new parameters
         assert not np.array_equal(
-            points_scorecard["Points"].values, 
-            points_scorecard2["Points"].values
+            points_scorecard["Points"].values, points_scorecard2["Points"].values
         )
-        
+
         # Get predictions after second points creation
-        points_scores2 = constructor.predict_score(X, method="pdo")
+        # points_scores2 = constructor.predict_score(X, method="pdo")  # Not used in test
         raw_scores_after2 = constructor.predict_score(X, method="raw")
-        
+
         # Raw scores should still match CatBoost predictions
         np.testing.assert_allclose(raw_scores_after2, cb_preds, rtol=1e-2, atol=1e-2)
-        
+
     except Exception as e:
         pytest.fail(f"create_points failed when called a second time: {str(e)}")
-    
+
     # Calculate Gini coefficients to verify that the predictive power is maintained
     cb_gini = 2 * roc_auc_score(y, cb_preds) - 1
     raw_gini = 2 * roc_auc_score(y, raw_scores_after) - 1
-    
+
     # Ensure Gini coefficient is consistent
     assert abs(cb_gini - raw_gini) < 0.01, "Raw scores Gini should match CatBoost Gini"
 
@@ -673,24 +673,26 @@ def test_feature_importance_and_multiple_create_points(credit_data, credit_model
 def test_pdo_scoring_produces_varied_scores():
     """Test that PDO scoring doesn't produce all constant values."""
     # Load test data
-    data_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "examples/data/test_data_01d9ab8b.csv")
+    data_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "examples/data/test_data_01d9ab8b.csv"
+    )
     credit_data = pd.read_csv(data_path)
-    
+
     # Prepare data
     num_features = ["Gross_Annual_Income", "Application_Score", "Bureau_Score"]
     categorical_features = ["Time_with_Bank"]
     features = num_features + categorical_features
-    
+
     X = credit_data[features]
     y = credit_data["Final_Decision"].replace({"Accept": 1, "Decline": 0})
-    
+
     # Create pool and model
     pool = Pool(
         data=X,
         label=y,
         cat_features=categorical_features,
     )
-    
+
     model = CatBoostClassifier(
         iterations=100,
         allow_writing_files=False,
@@ -700,24 +702,24 @@ def test_pdo_scoring_produces_varied_scores():
         one_hot_max_size=9999,
     )
     model.fit(pool)
-    
+
     # Create scorecard constructor and generate points
     constructor = CatBoostScorecardConstructor(model, pool)
-    scorecard = constructor.construct_scorecard()
-    
+    # scorecard = constructor.construct_scorecard()  # Not used in test
+
     # Create points
     constructor.create_points(pdo=50, target_points=600, target_odds=19)
-    
+
     # Get PDO scores
     points_scores = constructor.predict_score(X, method="pdo")
-    
+
     # Check that scores have variance (not all constant)
     score_std = np.std(points_scores)
     print(f"PDO scores standard deviation: {score_std}")
-    
+
     # Assert that standard deviation is greater than a small threshold
     assert score_std > 1.0, f"PDO scores have insufficient variance (std={score_std})"
-    
+
     # Check that there are at least two different score values
     unique_scores = np.unique(points_scores)
     assert len(unique_scores) > 1, f"All PDO scores are identical: {unique_scores[0]}"

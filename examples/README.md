@@ -57,4 +57,4 @@ jupyter notebook
 
 3. Open the desired notebook and follow the instructions.
 
-Note: The examples use sample data and may need to be adapted for your specific use case. 
+Note: The examples use sample data and may need to be adapted for your specific use case.

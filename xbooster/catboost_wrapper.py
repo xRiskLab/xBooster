@@ -164,14 +164,14 @@ class CatBoostWOEMapper:
         try:
             # Create a direct feature importance calculation from the scorecard
             feature_woe_sum = self.scorecard.groupby("Feature")["WOE"].sum().abs()
-            
+
             # Normalize to get relative importance
             total = feature_woe_sum.sum()
             importance = (feature_woe_sum / total).to_dict() if total > 0 else {}
-            
+
             self.feature_importance = importance
             return importance
-        
+
         finally:
             # Restore original value column setting
             self.value_column = original_value_column
@@ -375,9 +375,7 @@ class CatBoostWOEMapper:
 
     def get_value_type(self) -> str:
         """Return the type of value being used (Points, WOE, or LeafValue)."""
-        return (
-            "Points" if self.points_column else ("WOE" if self.use_woe else "LeafValue")
-        )
+        return "Points" if self.points_column else ("WOE" if self.use_woe else "LeafValue")
 
     def plot_feature_importance(
         self, figsize: Tuple[int, int] = (12, 8), top_n: Optional[int] = None
@@ -431,9 +429,7 @@ class CatBoostWOEMapper:
         plt.show()
 
     # Scorecard-based inference
-    def create_scorecard(
-        self, pdo_params: Optional[Dict[str, Any]] = None
-    ) -> pd.DataFrame:
+    def create_scorecard(self, pdo_params: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
         """
         Create a statistically aligned scorecard with accurate points calculation.
 
@@ -469,9 +465,7 @@ class CatBoostWOEMapper:
 
         # Base score from average event rate if available
         if "EventRate" in scorecard.columns:
-            base_odds = scorecard["EventRate"].mean() / (
-                1 - scorecard["EventRate"].mean()
-            )
+            base_odds = scorecard["EventRate"].mean() / (1 - scorecard["EventRate"].mean())
         else:
             base_odds = target_odds  # fallback
 
@@ -481,15 +475,15 @@ class CatBoostWOEMapper:
 
         # Calculate raw scores from WOE or LeafValue
         n_trees = len(scorecard["Tree"].unique())
-        
+
         # Directly use the value column for raw score calculation
         # We divide by number of trees to keep scores at a consistent scale
         scorecard["RawScore"] = -factor * scorecard[value_col] / n_trees
-        
+
         # Calculate points by adding the offset to the raw scores
         # Each leaf contributes its share to the overall score
-        scorecard["Points"] = offset/n_trees + scorecard["RawScore"]
-        
+        scorecard["Points"] = offset / n_trees + scorecard["RawScore"]
+
         # Apply rounding
         scorecard["Points"] = scorecard["Points"].round(precision_points)
         if precision_points <= 0:
@@ -516,9 +510,7 @@ class CatBoostWOEMapper:
         """
         # Validate method
         if method not in ["raw", "woe", "pdo"]:
-            raise ValueError(
-                f"Unknown scoring method: {method}. Use 'raw', 'woe', or 'pdo'."
-            )
+            raise ValueError(f"Unknown scoring method: {method}. Use 'raw', 'woe', or 'pdo'.")
 
         # Check if we need to create the scorecard first
         if method == "pdo" and not hasattr(self, "enhanced_scorecard"):
@@ -634,7 +626,8 @@ class CatBoostWOEMapper:
                         # No normalization for raw method
                         pass
                     elif method == "woe" and len(self.tree_indices) > 0:
-                        score += leaf[value_col]
+                        # WOE method - value is already set correctly
+                        pass
                     scores[unassigned_indices[matching_positions]] += value
 
                     # Mark these as assigned

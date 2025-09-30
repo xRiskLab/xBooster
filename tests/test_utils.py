@@ -39,39 +39,21 @@ def test_data_preprocessor():
     categorical_features = ["CategoricalFeature1"]
     target = "Target"
 
-    preprocessor = _utils.DataPreprocessor(
-        numerical_features, categorical_features, target
-    )
+    preprocessor = _utils.DataPreprocessor(numerical_features, categorical_features, target)
 
     # pylint: disable=C0103
     preprocessor.fit(dataset)
-    X, y = preprocessor.transform(
-        dataset
-    )
+    X, y = preprocessor.transform(dataset)
 
-    transformed_columns = [
-        col
-        for col in X.columns
-        if col not in numerical_features
-    ]
+    transformed_columns = [col for col in X.columns if col not in numerical_features]
 
-    interaction_constraints = (
-        preprocessor.generate_interaction_constraints(
-            transformed_columns
-        )
-    )
+    interaction_constraints = preprocessor.generate_interaction_constraints(transformed_columns)
 
     # Assert
-    assert isinstance(
-        X, pd.DataFrame
-    ), "X should be a DataFrame"
+    assert isinstance(X, pd.DataFrame), "X should be a DataFrame"
     assert isinstance(y, pd.Series), "y should be a Series"
-    assert len(X) == len(
-        y
-    ), "X and y should have the same length"
-    assert (
-        interaction_constraints is not None
-    ), "Interaction constraints should not be empty"
+    assert len(X) == len(y), "X and y should have the same length"
+    assert interaction_constraints is not None, "Interaction constraints should not be empty"
 
 
 # Test cases for calculate_weight_of_evidence
@@ -86,14 +68,10 @@ def test_calculate_weight_of_evidence():
         None
     """
     # Act
-    woe_table = _utils.calculate_weight_of_evidence(
-        xgb_scorecard
-    )
+    woe_table = _utils.calculate_weight_of_evidence(xgb_scorecard)
 
     # Assert
-    assert isinstance(
-        woe_table, pd.DataFrame
-    ), "Result is not a DataFrame"
+    assert isinstance(woe_table, pd.DataFrame), "Result is not a DataFrame"
     assert all(
         col in woe_table.columns
         for col in [
@@ -105,10 +83,9 @@ def test_calculate_weight_of_evidence():
             "WOE",
         ]
     ), "Columns are missing"
-    assert all(
-        isinstance(val, (int, float))
-        for val in woe_table["WOE"]
-    ), "WOE values are not numeric"
+    assert all(isinstance(val, (int, float)) for val in woe_table["WOE"]), (
+        "WOE values are not numeric"
+    )
 
 
 # Test cases for calculate_information_value
@@ -123,14 +100,10 @@ def test_calculate_information_value():
         None
     """
     # Act
-    iv_table = _utils.calculate_information_value(
-        xgb_scorecard
-    )
+    iv_table = _utils.calculate_information_value(xgb_scorecard)
 
     # Assert
-    assert isinstance(
-        iv_table, pd.DataFrame
-    ), "Result is not a DataFrame"
+    assert isinstance(iv_table, pd.DataFrame), "Result is not a DataFrame"
     assert all(
         col in iv_table.columns
         for col in [
@@ -143,10 +116,7 @@ def test_calculate_information_value():
             "IV",
         ]
     ), "Columns are missing"
-    assert all(
-        isinstance(val, (int, float))
-        for val in iv_table["IV"]
-    ), "IV values are not numeric"
+    assert all(isinstance(val, (int, float)) for val in iv_table["IV"]), "IV values are not numeric"
 
 
 # Test cases for calculate_likelihood
@@ -161,9 +131,7 @@ def test_calculate_likelihood():
     likelihood = _utils.calculate_likelihood(xgb_scorecard)
 
     # Assert
-    assert isinstance(
-        likelihood, pd.Series
-    ), "Result is not a Series"
-    assert all(
-        isinstance(val, (int, float)) for val in likelihood
-    ), "Likelihood values are not numeric"
+    assert isinstance(likelihood, pd.Series), "Result is not a Series"
+    assert all(isinstance(val, (int, float)) for val in likelihood), (
+        "Likelihood values are not numeric"
+    )

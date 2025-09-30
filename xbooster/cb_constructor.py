@@ -62,7 +62,7 @@ class CatBoostScorecardConstructor:
             "target_odds": 19,
             "precision_points": 0,
         }
-        
+
         # Store original mapper and scorecard for raw/woe predictions
         self.original_mapper: Optional[CatBoostWOEMapper] = None
         self.original_scorecard: Optional[pd.DataFrame] = None
@@ -104,7 +104,7 @@ class CatBoostScorecardConstructor:
         # Store the scorecard and tree indices
         self.scorecard = self.scorecard_df
         self.tree_indices = sorted(self.scorecard_df["Tree"].unique())
-        
+
         # Store the original objects
         self.original_mapper = self.mapper
         self.original_scorecard = self.scorecard_df
@@ -369,19 +369,19 @@ class CatBoostScorecardConstructor:
         if not self.points_enabled:
             self.original_mapper = self.mapper
             self.original_scorecard = self.scorecard.copy() if self.scorecard is not None else None
-        
+
         # First get the base scorecard
         scorecard = self.construct_scorecard().copy()
-        
+
         # Always use WOE for points calculation to ensure sufficient variance
         value_col = "WOE"
-        
+
         # Base score from average event rate if available
         if "EventRate" in scorecard.columns:
             base_odds = scorecard["EventRate"].mean() / (1 - scorecard["EventRate"].mean())
         else:
             base_odds = target_odds  # fallback
-            
+
         # Factor and Offset
         factor = pdo / np.log(2)
         offset = target_points - factor * np.log(base_odds)
@@ -400,8 +400,7 @@ class CatBoostScorecardConstructor:
 
         # Calculate points using apply
         scorecard["Points"] = scorecard.apply(
-            lambda row: tree_max[row.name] - row["RawScore"] - mean_shift, 
-            axis=1
+            lambda row: tree_max[row.name] - row["RawScore"] - mean_shift, axis=1
         )
         scorecard.reset_index(inplace=True)
 
@@ -409,11 +408,11 @@ class CatBoostScorecardConstructor:
         scorecard["Points"] = scorecard["Points"].round(precision_points)
         if precision_points <= 0:
             scorecard["Points"] = scorecard["Points"].astype(int)
-        
+
         # Store the updated scorecard
         self.scorecard = scorecard
         self.scorecard_df = scorecard
-        
+
         # Update mapper with the new scorecard that includes Points
         self.mapper = CatBoostWOEMapper(
             scorecard,
@@ -424,10 +423,10 @@ class CatBoostScorecardConstructor:
         self.mapper.enhanced_scorecard = scorecard  # Store enhanced scorecard
         self.mapper.generate_feature_mappings()
         self.mapper.calculate_feature_importance()
-        
+
         # Mark that points have been created
         self.points_enabled = True
-        
+
         return scorecard
 
     def predict_scores(self, features: Union[pd.DataFrame, Dict[str, Any]]) -> pd.DataFrame:
@@ -446,7 +445,7 @@ class CatBoostScorecardConstructor:
         # Get scores for each tree
         tree_scores = {}
         for tree_idx in self.tree_indices:
-            tree_data = self.scorecard[self.scorecard["Tree"] == tree_idx]
+            # tree_data = self.scorecard[self.scorecard["Tree"] == tree_idx]  # Not used
             if isinstance(features, dict):
                 features_df = pd.DataFrame([features])
             else:
@@ -474,7 +473,7 @@ class CatBoostScorecardConstructor:
         str
             The SQL query string.
         """
-       
+
         return ...
 
     @property

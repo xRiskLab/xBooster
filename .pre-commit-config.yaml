@@ -12,6 +12,7 @@ repos:
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-added-large-files
+        args: ['--maxkb=5000']  # Allow larger files for notebooks
       - id: check-merge-conflict
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
