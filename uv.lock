@@ -1414,7 +1414,7 @@ wheels = [
 
 [[package]]
 name = "xbooster"
-version = "0.2.6.post1"
+version = "0.2.6.1"
 source = { virtual = "." }
 dependencies = [
     { name = "catboost" },

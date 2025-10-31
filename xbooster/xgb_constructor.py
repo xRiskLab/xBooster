@@ -109,8 +109,16 @@ class XGBScorecardConstructor:  # pylint: disable=R0902
         """
         config = json.loads(self.booster_.save_config())
         if param == "base_score":
-            return float(config["learner"]["learner_model_param"][param])
-        return float(config["learner"]["gradient_booster"]["tree_train_param"][param])
+            value = config["learner"]["learner_model_param"][param]
+        else:
+            value = config["learner"]["gradient_booster"]["tree_train_param"][param]
+
+        # Handle different value formats from XGBoost config
+        if isinstance(value, str):
+            # Remove brackets if present (e.g., '[9.9E-2]' -> '9.9E-2')
+            value = value.strip("[]")
+
+        return float(value)
 
     def add_detailed_split(self, dataframe: Optional[pd.DataFrame] = None) -> pd.DataFrame:
         """
