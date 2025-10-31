@@ -197,6 +197,13 @@ class XGBScorecardConstructor:  # pylint: disable=R0902
         n_rounds = self.booster_.num_boosted_rounds()
         scores = np.full((X.shape[0],), self.base_score)  # pylint: disable=C0103
         xgb_features = xgb.DMatrix(X, base_margin=scores)  # pylint: disable=C0103
+        if output_type == "leaf_index":
+            # Predict leaf index
+            tree_leaf_idx = self.booster_.predict(xgb_features, pred_leaf=True)
+            df_leaf_indexes = pd.DataFrame(
+                tree_leaf_idx, columns=[f"tree_{i}" for i in range(n_rounds)]
+            )
+            return df_leaf_indexes
 
         df_leafs = pd.DataFrame()
         for i in range(n_rounds):
@@ -206,13 +213,7 @@ class XGBScorecardConstructor:  # pylint: disable=R0902
                 - scores
             )
             df_leafs[f"tree_{i}"] = tree_leafs.flatten()
-
-        # Predict leaf index
-        tree_leaf_idx = self.booster_.predict(xgb_features, pred_leaf=True)
-        df_leaf_indexes = pd.DataFrame(tree_leaf_idx)
-        df_leaf_indexes.columns = [f"tree_{i}" for i in range(n_rounds)]
-
-        return df_leaf_indexes if output_type == "leaf_index" else df_leafs
+        return df_leafs
 
     def extract_leaf_weights(self) -> pd.DataFrame:
         """
@@ -336,42 +337,17 @@ class XGBScorecardConstructor:  # pylint: disable=R0902
         n_rounds = self.booster_.num_boosted_rounds()
         labels = xgb_features_and_labels.get_label()
 
-        df_indexes = pd.DataFrame()
-        df_leafs = pd.DataFrame()
         df_binning_table = pd.DataFrame()
-
         # TODO: Refactor this part to re-use the get_leafs method in the future
         # Summing margins from a booster, adopted from here:
         # https://xgboost.readthedocs.io/en/latest/python/examples/individual_trees.html
+        # Predict leaf index
+        tree_leaf_idx = self.booster_.predict(xgb_features_and_labels, pred_leaf=True)
         for i in range(n_rounds):
-            if i == 0:
-                # predict leaf index
-                tree_leaf_idx = self.booster_.predict(
-                    xgb_features_and_labels, iteration_range=(0, i + 1), pred_leaf=True
-                )
-                # predict margin
-                tree_leafs = (
-                    self.booster_.predict(
-                        xgb_features_and_labels, iteration_range=(0, i + 1), output_margin=True
-                    )
-                    - scores
-                )
-            else:
-                # Predict leaf index
-                tree_leaf_idx = self.booster_.predict(
-                    xgb_features_and_labels, iteration_range=(0, i + 1), pred_leaf=True
-                )[:, -1]
-                # Predict margin
-                tree_leafs = (
-                    self.booster_.predict(
-                        xgb_features_and_labels, iteration_range=(i, i + 1), output_margin=True
-                    )
-                    - scores
-                )
             # Get counts of events and non-events
             index_and_label = pd.concat(
                 [
-                    pd.Series(tree_leaf_idx, name="leaf_idx"),
+                    pd.Series(tree_leaf_idx[:, i], name="leaf_idx"),
                     pd.Series(labels, name="label"),
                 ],
                 axis=1,
@@ -388,8 +364,6 @@ class XGBScorecardConstructor:  # pylint: disable=R0902
                 ["tree", "leaf_idx", "Events", "NonEvents", "Count", "EventRate"]
             ]
             # Aggregate indices, leafs, and counts of events and non-events
-            df_indexes = pd.concat([df_indexes, pd.Series(tree_leaf_idx, name=f"tree_{i}")], axis=1)
-            df_leafs = pd.concat([df_leafs, pd.Series(tree_leafs, name=f"tree_{i}")], axis=1)
             df_binning_table = pd.concat([df_binning_table, binning_table], axis=0)
         # Extract leaf weights (XAddEvidence)
         df_x_add_evidence = self.extract_leaf_weights()
