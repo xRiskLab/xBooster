@@ -198,37 +198,19 @@ class XGBScorecardConstructor:  # pylint: disable=R0902
         scores = np.full((X.shape[0],), self.base_score)  # pylint: disable=C0103
         xgb_features = xgb.DMatrix(X, base_margin=scores)  # pylint: disable=C0103
 
-        df_leaf_indexes = pd.DataFrame()
         df_leafs = pd.DataFrame()
-
         for i in range(n_rounds):
-            if i == 0:
-                # predict leaf index
-                tree_leaf_idx = self.booster_.predict(
-                    xgb_features, iteration_range=(0, i + 1), pred_leaf=True
-                )
-                # predict margin
-                tree_leafs = (
-                    self.booster_.predict(
-                        xgb_features, iteration_range=(0, i + 1), output_margin=True
-                    )
-                    - scores
-                )
-            else:
-                # Predict leaf index
-                tree_leaf_idx = self.booster_.predict(
-                    xgb_features, iteration_range=(0, i + 1), pred_leaf=True
-                )[:, -1]
-                # Predict margin
-                tree_leafs = (
-                    self.booster_.predict(
-                        xgb_features, iteration_range=(i, i + 1), output_margin=True
-                    )
-                    - scores
-                )
-
-            df_leaf_indexes[f"tree_{i}"] = tree_leaf_idx.flatten()
+            # Predict margin
+            tree_leafs = (
+                self.booster_.predict(xgb_features, iteration_range=(i, i + 1), output_margin=True)
+                - scores
+            )
             df_leafs[f"tree_{i}"] = tree_leafs.flatten()
+
+        # Predict leaf index
+        tree_leaf_idx = self.booster_.predict(xgb_features, pred_leaf=True)
+        df_leaf_indexes = pd.DataFrame(tree_leaf_idx)
+        df_leaf_indexes.columns = [f"tree_{i}" for i in range(n_rounds)]
 
         return df_leaf_indexes if output_type == "leaf_index" else df_leafs
 
