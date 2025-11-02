@@ -197,12 +197,11 @@ class XGBScorecardConstructor:  # pylint: disable=R0902
         n_rounds = self.booster_.num_boosted_rounds()
         scores = np.full((X.shape[0],), self.base_score)  # pylint: disable=C0103
         xgb_features = xgb.DMatrix(X, base_margin=scores)  # pylint: disable=C0103
+        _colnames = [f"tree_{i}" for i in range(n_rounds)]
         if output_type == "leaf_index":
             # Predict leaf index
             tree_leaf_idx = self.booster_.predict(xgb_features, pred_leaf=True)
-            df_leaf_indexes = pd.DataFrame(
-                tree_leaf_idx, columns=[f"tree_{i}" for i in range(n_rounds)]
-            )
+            df_leaf_indexes = pd.DataFrame(tree_leaf_idx, columns=_colnames)
             return df_leaf_indexes
 
         df_leafs = pd.DataFrame()
@@ -343,6 +342,11 @@ class XGBScorecardConstructor:  # pylint: disable=R0902
         # https://xgboost.readthedocs.io/en/latest/python/examples/individual_trees.html
         # Predict leaf index
         tree_leaf_idx = self.booster_.predict(xgb_features_and_labels, pred_leaf=True)
+        if tree_leaf_idx.shape != (len(labels), n_rounds):
+            raise ValueError(
+                f"Invalid leaf index shape {tree_leaf_idx.shape}. Expected {(len(labels), n_rounds)}"
+            )
+
         for i in range(n_rounds):
             # Get counts of events and non-events
             index_and_label = pd.concat(
