@@ -58,22 +58,22 @@ X_train, X_test, y_train, y_test = train_test_split(
 
 # Train the XGBoost model
 best_params = {
-    'n_estimators': 100,
-    'learning_rate': 0.55,
-    'max_depth': 1,
-    'min_child_weight': 10,
-    'grow_policy': "lossguide",
-    'early_stopping_rounds': 5
+    "n_estimators": 100,
+    "learning_rate": 0.55,
+    "max_depth": 1,
+    "min_child_weight": 10,
+    "grow_policy": "lossguide",
+    "early_stopping_rounds": 5
 }
 model = xgb.XGBClassifier(**best_params, random_state=62)
-model.fit(X_train, y_train)
+model.fit(X_train, y_train, eval_set=[(X_test, y_test)])
 
 # Initialize XGBScorecardConstructor
 scorecard_constructor = XGBScorecardConstructor(model, X_train, y_train)
 scorecard_constructor.construct_scorecard()
 
 # Print the scorecard
-print(scorecard_constructor.scorecard)
+print(scorecard_constructor.xgb_scorecard)
 ```
 
 After this, we can create a scorecard and test its Gini score:
