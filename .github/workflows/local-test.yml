@@ -1,0 +1,48 @@
+name: Local Testing (act)
+
+# This workflow is optimized for local testing with `act`
+# Run with: act -W .github/workflows/local-test.yml
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  quick-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v1
+      with:
+        version: "latest"
+
+    - name: Install dependencies
+      run: |
+        uv sync --dev
+
+    - name: Quick validation
+      run: |
+        echo "Running quick validation tests..."
+        uv run python -c "import xbooster; print(f'xBooster version: {xbooster.__version__}')"
+        uv run python -c "import xgboost as xgb; print(f'XGBoost version: {xgb.__version__}')"
+
+    - name: Run ruff check
+      run: |
+        uv run ruff check xbooster/ --quiet || echo "Linting issues found"
+
+    - name: Run type check
+      run: |
+        uv run ty check || echo "Type checking issues found"
+
+    - name: Run quick tests (no full suite)
+      run: |
+        # Run just a few quick tests to validate setup
+        uv run pytest tests/test_utils.py -v

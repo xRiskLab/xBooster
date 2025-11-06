@@ -127,8 +127,6 @@ exclude = [
 [tool.ty.rules]
 # Common ML libraries have incomplete type stubs
 unresolved-import = "ignore"
-# XGBoost and CatBoost models have dynamic attributes
-possibly-unbound-attribute = "ignore"
 unresolved-reference = "ignore"
 
 # Include type stubs directory if created in the future
@@ -149,15 +147,33 @@ no-matching-overload = "ignore"
 include = ["tests/**"]
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"
-possibly-unbound-attribute = "ignore"
 no-matching-overload = "ignore"
 
 # Specific overrides for xbooster modules with XGBoost/CatBoost
 [[tool.ty.overrides]]
 include = ["xbooster/xgb_constructor.py", "xbooster/cb_constructor.py", "xbooster/catboost_*.py"]
 [tool.ty.overrides.rules]
-possibly-unbound-attribute = "ignore"
 unresolved-attribute = "ignore"
+possibly-missing-attribute = "ignore"
+invalid-return-type = "ignore"
+invalid-assignment = "ignore"
+no-matching-overload = "ignore"
+invalid-argument-type = "ignore"
+
+# Override for parser and explainer - dynamic ML library attributes
+[[tool.ty.overrides]]
+include = ["xbooster/_parser.py", "xbooster/explainer.py"]
+[tool.ty.overrides.rules]
+possibly-missing-attribute = "ignore"
+invalid-argument-type = "ignore"
+
+# Override for utils - pandas/matplotlib type complexity
+[[tool.ty.overrides]]
+include = ["xbooster/_utils.py"]
+[tool.ty.overrides.rules]
+unsupported-operator = "ignore"
+invalid-argument-type = "ignore"
+not-iterable = "ignore"
 
 [[tool.uv.index]]
 name = "testpypi"

@@ -5,7 +5,7 @@ A Python package for building and deploying interpretable credit scorecards
 from gradient boosted tree models (XGBoost and CatBoost).
 """
 
-__version__ = "0.2.6.1"
+__version__ = "0.2.7"
 __author__ = "xRiskLab"
 __email__ = "contact@xrisklab.ai"
 

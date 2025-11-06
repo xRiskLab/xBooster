@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.2.7] - 2025-11-06
+
+### Changed
+- **Code Optimization**: Simplified `get_leafs()` and `construct_scorecard()` methods in `XGBScorecardConstructor` (PR #6)
+  - Removed special-case branching for first iteration
+  - Precomputes full leaf index matrix once instead of repeated predictions
+  - Eliminates redundant DataFrame concatenations
+  - Net reduction of 40 lines of code while maintaining identical functionality
+
+### Added
+- **Comprehensive Regression Tests**: Added 13 new tests to verify code refactoring produces identical outputs
+- **Build System Improvements**: Modernized hatchling configuration
+  - Simplified version management in `__init__.py`
+  - Removed setuptools legacy configuration
+  - Added explicit egg-info exclusion
+- **Code Quality Tools**: Added `prek` and `ty` type checker configurations
+- **Type Stubs Directory**: Created `typings/` directory for custom type definitions
+
+### Fixed
+- Improved `.gitignore` to properly exclude build artifacts and egg-info files
+
+### Technical Details
+- All 95 tests passing with no regressions
+- Leaf indices now stored as float32 (XGBoost's default) but represent whole numbers
+- Float precision differences negligible (< 1e-6)
+- Performance maintained across all operations
+
 ## [0.2.6.post1] - 2025-09-30
 
 ### Changed

@@ -922,7 +922,11 @@ class XGBScorecardConstructor:  # pylint: disable=R0902
         return self.xgb_scorecard_intv
 
     def create_points_peo_pdo(
-        self, peo: int, pdo: int, precision_points: int = 0, scorecard: pd.DataFrame = None
+        self,
+        peo: int,
+        pdo: int,
+        precision_points: int = 0,
+        scorecard: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """
         Creates a column with points ('Points_PEO_PDO') on a scorecard by intervals

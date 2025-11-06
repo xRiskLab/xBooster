@@ -1,0 +1,48 @@
+name: Type Checking
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  type-check:
+    runs-on: ubuntu-latest
+    # Only test on one Python version for type checking to speed up CI
+    # Type issues are generally consistent across Python versions
+    strategy:
+      matrix:
+        python-version: ["3.11"]  # Use 3.11 as it has good type checking support
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        version: "latest"
+
+    - name: Set up Python ${{ matrix.python-version }}
+      run: uv python install ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        uv sync --dev
+
+    - name: Verify installation
+      run: |
+        uv run python -c "import xbooster; print(f'xBooster v{xbooster.__version__}')"
+        uv run python -c "import ty; print('ty installed')"
+
+    - name: Run linting
+      run: |
+        uv run ruff check xbooster/ tests/
+
+    - name: Run format check
+      run: |
+        uv run ruff format --check xbooster/ tests/
+
+    - name: Run type checking
+      run: |
+        uv run ty check

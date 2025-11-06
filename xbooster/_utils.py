@@ -6,7 +6,7 @@ Since these metrics are reused by different modules, I decided to create a separ
 Additionally, if one wants to adjust WOE calculation it will be easier to do within this module.
 """
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -336,7 +336,7 @@ class CatBoostPreprocessor(BaseEstimator, TransformerMixin):
         self.category_maps = {}
         self.cat_features_ = None
 
-    def fit(self, X: pd.DataFrame, y=None, cat_features: list[str] = None):
+    def fit(self, X: pd.DataFrame, y=None, cat_features: Optional[list[str]] = None):
         """Fit the preprocessor to the DataFrame."""
         self.cat_features_ = cat_features or X.select_dtypes(include="object").columns.tolist()
 
@@ -366,7 +366,7 @@ class CatBoostPreprocessor(BaseEstimator, TransformerMixin):
 
     # pylint: disable=arguments-differ
     def fit_transform(
-        self, X: pd.DataFrame, y=None, cat_features: list[str] = None
+        self, X: pd.DataFrame, y=None, cat_features: Optional[list[str]] = None
     ) -> pd.DataFrame:
         """Fit the preprocessor and transform the data."""
         return self.fit(X, y, cat_features).transform(X)
@@ -383,7 +383,7 @@ class CatBoostPreprocessor(BaseEstimator, TransformerMixin):
 class CatBoostTreeVisualizer:
     """Class to visualize CatBoost trees with correct branch ordering and accurate split conditions."""
 
-    def __init__(self, scorecard: pd.DataFrame, plot_config: Dict[str, Any] = None):
+    def __init__(self, scorecard: pd.DataFrame, plot_config: Optional[Dict[str, Any]] = None):
         self.scorecard = scorecard
         self.tree_cache = {}
         self.plot_config = plot_config or {}
@@ -471,14 +471,14 @@ class CatBoostTreeVisualizer:
         node: Dict[str, Any],
         depth: int = 0,
         pos_x: float = 0.0,
-        level_distance: float = None,
-        sibling_distance: float = None,
+        level_distance: Optional[float] = None,
+        sibling_distance: Optional[float] = None,
     ) -> None:
         """Draw tree with accurate CatBoost split logic."""
         if level_distance is None:
-            level_distance = self.config["level_distance"]
+            level_distance = float(self.config["level_distance"])
         if sibling_distance is None:
-            sibling_distance = self.config["sibling_distance"]
+            sibling_distance = float(self.config["sibling_distance"])
 
         node_pos = (pos_x, -depth * level_distance)
 
@@ -551,7 +551,7 @@ class CatBoostTreeVisualizer:
                     sibling_distance / 1.8,
                 )
 
-    def plot_tree(self, tree_idx: int = 0, title: str = None) -> None:
+    def plot_tree(self, tree_idx: int = 0, title: Optional[str] = None) -> None:
         """Plot tree with accurate CatBoost split logic."""
         if tree_idx not in self.tree_cache:
             self.build_tree(tree_idx)
