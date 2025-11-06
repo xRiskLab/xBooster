@@ -1,11 +1,16 @@
 """
-xbooster
+xbooster - Explainable Boosted Scoring
+
+A Python package for building and deploying interpretable credit scorecards
+from gradient boosted tree models (XGBoost and CatBoost).
 """
 
-from importlib.metadata import version, PackageNotFoundError
+__version__ = "0.2.6.1"
+__author__ = "xRiskLab"
+__email__ = "contact@xrisklab.ai"
 
-try:
-    __version__ = version("xbooster")
-except PackageNotFoundError:
-    # package is not installed
-    __version__ = "unknown"
+__all__ = [
+    "__version__",
+    "__author__",
+    "__email__",
+]

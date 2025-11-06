@@ -21,7 +21,11 @@ models
 build
 lib
 xbooster.egg-info
+*.egg-info
 tmp
 python-workspace.code-workspace
 examples/*.sql
 examples/*.py
+# Keep typings directory but ignore pycache
+typings/__pycache__
+typings/**/*.pyc

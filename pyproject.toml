@@ -1,6 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "xbooster/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["xbooster"]
+exclude = [
+    "*.egg-info",
+    "__pycache__",
+    "*.pyc",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/xbooster",
+    "/tests",
+    "/examples",
+    "/README.md",
+    "/LICENSE.md",
+]
+exclude = [
+    "*.egg-info",
+    "__pycache__",
+    "*.pyc",
+    "/dist",
+    "/build",
+]
+
 [project]
 name = "xbooster"
-version = "0.2.6.1"
+dynamic = ["version"]
 description = "Explainable Boosted Scoring"
 authors = [
     {name = "xRiskLab", email = "contact@xrisklab.ai"}
@@ -44,10 +75,8 @@ dev = [
     "nbconvert>=7.16.6",
     "pandas-stubs>=2.2.3",
     "prek>=0.2.0",
+    "ty>=0.0.1a21",
 ]
-
-[tool.setuptools.packages.find]
-exclude = ["tmp*", "catboost_info*"]
 
 [tool.uv]
 default-groups = ["dev"]
@@ -84,6 +113,51 @@ init-hook = "import sys, os; sys.path.insert(0, os.path.join(os.getcwd(), '.venv
 
 [tool.pylint.format]
 max-line-length = 88
+
+# prek - Python Requirements Checker
+[tool.prek]
+# Check that imports match dependencies in pyproject.toml
+check-imports = true
+# Exclude test and example files from strict import checking
+exclude = [
+    "tests/**",
+    "examples/**",
+]
+
+[tool.ty.rules]
+# Common ML libraries have incomplete type stubs
+unresolved-import = "ignore"
+# XGBoost and CatBoost models have dynamic attributes
+possibly-unbound-attribute = "ignore"
+unresolved-reference = "ignore"
+
+# Include type stubs directory if created in the future
+[tool.ty.src]
+include = ["xbooster", "typings"]
+
+# Override rules for examples - more lenient
+[[tool.ty.overrides]]
+include = ["examples/**"]
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
+unsupported-operator = "ignore"
+unresolved-attribute = "ignore"
+no-matching-overload = "ignore"
+
+# Override rules for tests - allow test patterns
+[[tool.ty.overrides]]
+include = ["tests/**"]
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
+possibly-unbound-attribute = "ignore"
+no-matching-overload = "ignore"
+
+# Specific overrides for xbooster modules with XGBoost/CatBoost
+[[tool.ty.overrides]]
+include = ["xbooster/xgb_constructor.py", "xbooster/cb_constructor.py", "xbooster/catboost_*.py"]
+[tool.ty.overrides.rules]
+possibly-unbound-attribute = "ignore"
+unresolved-attribute = "ignore"
 
 [[tool.uv.index]]
 name = "testpypi"
