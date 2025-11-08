@@ -4,12 +4,5 @@
 # Use amd64 architecture for M-series compatibility
 --container-architecture linux/amd64
 
-# Use medium-sized runner image (saves memory)
+# Use medium-sized runner image
 -P ubuntu-latest=catthehacker/ubuntu:act-22.04
-
-# Disable parallel execution to save memory
---parallel=false
-
-# Set resource limits
---cpus 2
---memory 4g

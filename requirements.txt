@@ -232,6 +232,14 @@ kiwisolver==1.4.8 \
     --hash=sha256:e7a019419b7b510f0f7c9dceff8c5eae2392037eae483a7f9162625233802b0a \
     --hash=sha256:eb158fe28ca0c29f2260cca8c43005329ad58452c36f0edf298204de32a9a3ed
     # via matplotlib
+lightgbm==4.6.0 \
+    --hash=sha256:2dafd98d4e02b844ceb0b61450a660681076b1ea6c7adb8c566dfd66832aafad \
+    --hash=sha256:37089ee95664b6550a7189d887dbf098e3eadab03537e411f52c63c121e3ba4b \
+    --hash=sha256:4d68712bbd2b57a0b14390cbf9376c1d5ed773fa2e71e099cac588703b590336 \
+    --hash=sha256:b7a393de8a334d5c8e490df91270f0763f83f959574d504c7ccb9eee4aef70ed \
+    --hash=sha256:cb19b5afea55b5b61cbb2131095f50538bd608a00655f23ad5d25ae3e3bf1c8d \
+    --hash=sha256:cb1c59720eb569389c0ba74d14f52351b573af489f230032a1c9f314f8bab7fe
+    # via xbooster
 llvmlite==0.44.0 \
     --hash=sha256:07667d66a5d150abed9157ab6c0b9393c9356f229784a4385c02f99e94fc94d4 \
     --hash=sha256:40526fb5e313d7b96bda4cbb2c85cd5374e04d80732dd36a282d72a560bb6408 \
@@ -329,6 +337,7 @@ numpy==1.26.4 \
     # via
     #   catboost
     #   contourpy
+    #   lightgbm
     #   matplotlib
     #   numba
     #   pandas
@@ -618,6 +627,7 @@ scipy==1.15.2 \
     --hash=sha256:ecf797d2d798cf7c838c6d98321061eb3e72a74710e6c40540f0e8087e3b499e
     # via
     #   catboost
+    #   lightgbm
     #   scikit-learn
     #   shap
     #   xbooster
