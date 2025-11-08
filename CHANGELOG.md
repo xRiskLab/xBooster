@@ -17,6 +17,8 @@
   - Enhanced Makefile with colored output and Docker checks
   - Added new targets: `make ci-check`, `make act-local`, `make test-quick`
   - Single entry point for all development tasks
+  - `make ci-check` runs fast local checks (no Docker)
+  - `make act-*` commands use Docker for GitHub Actions simulation
 
 ### Fixed
 - **CI/CD**: Added missing `lightgbm>=4.0.0,<5.0.0` dependency
