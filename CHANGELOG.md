@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.2.7a1] - 2025-11-08 (Alpha)
+## [0.2.7a2] - 2025-11-08 (Alpha)
 
 ### Added
 - **LightGBM Support (Alpha)**: Initial implementation of `LGBScorecardConstructor` for LightGBM models
@@ -31,8 +31,8 @@
 
 ### Installation
 ```bash
-# Install alpha release
-pip install git+https://github.com/xRiskLab/xBooster.git@v0.2.7a1
+# Install latest alpha release
+pip install git+https://github.com/xRiskLab/xBooster.git@v0.2.7a2
 ```
 
 ## [0.2.7] - 2025-11-06
