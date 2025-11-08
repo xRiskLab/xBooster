@@ -36,13 +36,13 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import xgboost as xgb
-from scipy.special import logit  # pylint: disable=E0611
+from scipy.special import logit
 
 from ._parser import TreeParser
 from ._utils import calculate_information_value, calculate_weight_of_evidence
 
 
-class XGBScorecardConstructor:  # pylint: disable=R0902
+class XGBScorecardConstructor:
     """
     Author: Denis Burakov (GitHub: http://github.com/deburky)
 
@@ -201,8 +201,7 @@ class XGBScorecardConstructor:  # pylint: disable=R0902
         if output_type == "leaf_index":
             # Predict leaf index
             tree_leaf_idx = self.booster_.predict(xgb_features, pred_leaf=True)
-            df_leaf_indexes = pd.DataFrame(tree_leaf_idx, columns=_colnames)
-            return df_leaf_indexes
+            return pd.DataFrame(tree_leaf_idx, columns=_colnames)
 
         df_leafs = pd.DataFrame()
         for i in range(n_rounds):

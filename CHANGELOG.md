@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.2.7a1] - 2025-11-08 (Alpha)
+
+### Added
+- **LightGBM Support (Alpha)**: Initial implementation of `LGBScorecardConstructor` for LightGBM models
+  - Implemented `extract_leaf_weights()` method for parsing LightGBM tree structure
+  - Implemented `get_leafs()` method for leaf indices and margins prediction
+  - Added comprehensive test suite with 9 tests (all passing)
+  - Created example demonstrating implemented functionality
+  - **Status**: Alpha release - 2 of 5 core methods implemented
+  - **Community**: Reference implementation for issue #7 (@RektPunk)
+
+### Changed
+- **Development Workflow**: Consolidated shell scripts into enhanced Makefile
+  - Removed `run-ci-checks.sh` and `run-act.sh` scripts
+  - Enhanced Makefile with colored output and Docker checks
+  - Added new targets: `make ci-check`, `make act-local`, `make test-quick`
+  - Single entry point for all development tasks
+
+### Fixed
+- **CI/CD**: Added missing `lightgbm>=4.0.0,<5.0.0` dependency
+- **Type Checking**: Added LightGBM type stubs and configured ignore rules
+- **GitHub Actions**: Fixed act configuration by removing unsupported flags
+
+### Technical Details
+- LightGBM constructor follows same pattern as XGBoost/CatBoost implementations
+- Column naming unified to `XAddEvidence` for consistency across all constructors
+- Test suite expanded from 95 to 104 tests
+- All tests passing in local and CI environments
+
+### Installation
+```bash
+# Install alpha release
+pip install git+https://github.com/xRiskLab/xBooster.git@v0.2.7a1
+```
+
 ## [0.2.7] - 2025-11-06
 
 ### Changed

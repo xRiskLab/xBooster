@@ -33,9 +33,9 @@ Example usage (to be implemented):
     print(f"Test Gini score: {gini:.2%}")
 """
 
-import lightgbm as lgb
 import numpy as np
 import pandas as pd
+from lightgbm import LGBMClassifier
 
 # Note: These will be needed when implementing the methods:
 # from typing import Optional
@@ -89,7 +89,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             X: Training features
             y: Training labels
         """
-        if not isinstance(model, lgb.LGBMClassifier):
+        if not isinstance(model, LGBMClassifier):
             raise TypeError("model must be an instance of lightgbm.LGBMClassifier")
 
         self.model = model

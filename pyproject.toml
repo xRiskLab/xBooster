@@ -150,12 +150,13 @@ include = ["tests/**"]
 unresolved-import = "ignore"
 no-matching-overload = "ignore"
 
-# Specific overrides for xbooster modules with XGBoost/CatBoost
+# Specific overrides for xbooster modules with XGBoost/CatBoost/LightGBM
 [[tool.ty.overrides]]
-include = ["xbooster/xgb_constructor.py", "xbooster/cb_constructor.py", "xbooster/catboost_*.py"]
+include = ["xbooster/xgb_constructor.py", "xbooster/cb_constructor.py", "xbooster/catboost_*.py", "xbooster/lgb_constructor.py"]
 [tool.ty.overrides.rules]
 unresolved-attribute = "ignore"
 possibly-missing-attribute = "ignore"
+possibly-missing-import = "ignore"
 invalid-return-type = "ignore"
 invalid-assignment = "ignore"
 no-matching-overload = "ignore"
