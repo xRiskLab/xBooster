@@ -36,6 +36,7 @@ Example usage (to be implemented):
 import numpy as np
 import pandas as pd
 from lightgbm import LGBMClassifier
+from ._utils import calculate_information_value, calculate_weight_of_evidence
 
 # Note: These will be needed when implementing the methods:
 # from typing import Optional
@@ -211,6 +212,8 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         leaf_nodes = tree_df[tree_df["split_feature"].isna()][
             ["tree_index", "node_index", "value"]
         ].copy()
+        # Make leaf index relative within each tree
+        leaf_nodes["relative_leaf_index"] = leaf_nodes.groupby("tree_index").cumcount()
 
         # Helper function to merge decision nodes with leaf values
         def merge_and_format(decisions, leafs, child_column, sign):
@@ -223,7 +226,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             )
             result = merged.rename(
                 columns={
-                    "node_index_y": "Node",  # Leaf node index
+                    "relative_leaf_index": "Node",  # Leaf node index
                     "split_feature": "Feature",
                     "threshold": "Split",
                     "value": "XAddEvidence",
@@ -257,10 +260,93 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         - Use get_leafs() to map observations to leaf nodes
         - Calculate event rates per leaf
         - Apply WOE/IV calculations from _utils
-
-        TODO: Implement this method following XGBoost pattern
         """
-        raise NotImplementedError("construct_scorecard() method needs to be implemented")
+        n_trees = self.booster_.num_trees()
+        labels = self.y
+        tree_leaf_idx = self.booster_.predict(self.X, pred_leaf=True)
+        if tree_leaf_idx.shape != (len(labels), n_trees):
+            raise ValueError(
+                f"Invalid leaf index shape {tree_leaf_idx.shape}. Expected {(len(labels), n_trees)}"
+            )
+
+        df_binning_table = pd.DataFrame()
+        for i in range(n_trees):
+            index_and_label = pd.concat(
+                [
+                    pd.Series(tree_leaf_idx[:, i], name="leaf_idx"),
+                    pd.Series(labels, name="label"),
+                ],
+                axis=1,
+            )
+            # Create a binning table
+            binning_table = (
+                index_and_label.groupby("leaf_idx").agg(["sum", "count"]).reset_index()
+            ).astype(float)
+            binning_table.columns = ["leaf_idx", "Events", "Count"]  # type: ignore
+            binning_table["tree"] = i
+            binning_table["NonEvents"] = binning_table["Count"] - binning_table["Events"]
+            binning_table["EventRate"] = binning_table["Events"] / binning_table["Count"]
+            binning_table = binning_table[
+                ["tree", "leaf_idx", "Events", "NonEvents", "Count", "EventRate"]
+            ]
+            # Aggregate indices, leafs, and counts of events and non-events
+            df_binning_table = pd.concat([df_binning_table, binning_table], axis=0)
+        # Extract leaf weights (XAddEvidence)
+        df_x_add_evidence = self.extract_leaf_weights()
+        self.lgb_scorecard = df_x_add_evidence.merge(
+            df_binning_table,
+            left_on=["Tree", "Node"],
+            right_on=["tree", "leaf_idx"],
+            how="left",
+        ).drop(["tree", "leaf_idx"], axis=1)
+
+        self.lgb_scorecard = self.lgb_scorecard[
+            [
+                "Tree",
+                "Node",
+                "Feature",
+                "Sign",
+                "Split",
+                "Count",
+                "NonEvents",
+                "Events",
+                "EventRate",
+                "XAddEvidence",
+            ]
+        ]
+
+        # Sort by Tree and Node
+        self.lgb_scorecard = self.lgb_scorecard.sort_values(by=["Tree", "Node"]).reset_index(
+            drop=True
+        )
+        # Get WOE and IV scores
+        self.lgb_scorecard["WOE"] = calculate_weight_of_evidence(self.lgb_scorecard)["WOE"]
+        self.lgb_scorecard["IV"] = calculate_information_value(self.lgb_scorecard)["IV"]
+
+        # Get % of observation counts in a Split
+        self.lgb_scorecard["CountPct"] = self.lgb_scorecard["Count"] / self.lgb_scorecard.groupby(
+            "Tree"
+        )["Count"].transform("sum")
+
+        self.lgb_scorecard = self.lgb_scorecard[
+            [
+                "Tree",
+                "Node",
+                "Feature",
+                "Sign",
+                "Split",
+                "Count",
+                "CountPct",
+                "NonEvents",
+                "Events",
+                "EventRate",
+                "WOE",
+                "IV",
+                "XAddEvidence",
+                "DetailedSplit",
+            ]
+        ]
+        return self.lgb_scorecard
 
     def create_points(
         self,
