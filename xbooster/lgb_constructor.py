@@ -174,7 +174,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         for i in range(n_trees):
             df_leafs[f"tree_{i}"] = self.model.predict(
                 X, raw_score=True, start_iteration=i, num_iteration=1
-            )
+            ) - self.base_score * (i == 0)
 
         return df_leafs
 
