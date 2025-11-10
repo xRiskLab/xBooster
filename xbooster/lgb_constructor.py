@@ -171,18 +171,9 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         # Note: This is an approximation - pred_contrib gives feature contributions
         # For now, we'll use predict with num_iteration to get cumulative scores
         for i in range(n_trees):
-            if i == 0:
-                # First tree contribution is the raw score from just that tree
-                tree_margin = (
-                    self.model.predict(X, raw_score=True, num_iteration=1) - self.base_score
-                )
-            else:
-                # Subsequent trees: difference between cumulative scores
-                curr_score = self.model.predict(X, raw_score=True, num_iteration=i + 1)
-                prev_score = self.model.predict(X, raw_score=True, num_iteration=i)
-                tree_margin = curr_score - prev_score
-
-            df_leafs[f"tree_{i}"] = tree_margin
+            df_leafs[f"tree_{i}"] = self.model.predict(
+                X, raw_score=True, start_iteration=i, num_iteration=1
+            )
 
         return df_leafs
 
