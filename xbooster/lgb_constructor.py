@@ -343,7 +343,6 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
                 "WOE",
                 "IV",
                 "XAddEvidence",
-                "DetailedSplit",
             ]
         ]
         return self.lgb_scorecard
