@@ -91,9 +91,6 @@ def test_lgb_constructor_methods_raise_not_implemented(trained_lgb_model, sample
 
     # These methods are still stubs
     with pytest.raises(NotImplementedError):
-        constructor.construct_scorecard()
-
-    with pytest.raises(NotImplementedError):
         constructor.create_points()
 
     with pytest.raises(NotImplementedError):
@@ -173,3 +170,11 @@ def test_get_leafs_margin(trained_lgb_model, sample_data):
     margin_sum = margins.sum(axis=1).values + constructor.base_score
 
     assert np.allclose(margin_sum, raw_pred, rtol=1e-5)
+
+
+def test_construct_scorecard(trained_lgb_model, sample_data):
+    X, y = sample_data
+    constructor = LGBScorecardConstructor(trained_lgb_model, X, y)
+    scorecard = constructor.construct_scorecard()
+    assert isinstance(scorecard, pd.DataFrame)
+    assert not scorecard.empty
