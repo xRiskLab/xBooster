@@ -165,9 +165,10 @@ def test_get_leafs_margin(trained_lgb_model, sample_data):
     assert margins.shape[0] == len(X)
     assert margins.shape[1] == trained_lgb_model.n_estimators
 
-    # Check that margins sum to raw predictions (accounting for base score)
+    # Check that margins sum to raw predictions
+    # Note: LightGBM's per-tree predictions already sum to total (no separate base_score addition)
     raw_pred = trained_lgb_model.predict(X, raw_score=True)
-    margin_sum = margins.sum(axis=1).values + constructor.base_score
+    margin_sum = margins.sum(axis=1).values
 
     assert np.allclose(margin_sum, raw_pred, rtol=1e-5)
 
@@ -178,3 +179,56 @@ def test_construct_scorecard(trained_lgb_model, sample_data):
     scorecard = constructor.construct_scorecard()
     assert isinstance(scorecard, pd.DataFrame)
     assert not scorecard.empty
+
+
+def test_two_tree_base_score_validation(sample_data):
+    """
+    Two-tree trick to validate base score handling (similar to Issue #2).
+
+    This test verifies that per-tree margins correctly sum to the total raw prediction.
+    Using only 2 trees allows us to isolate and verify the base score behavior.
+    """
+    X, y = sample_data
+
+    # Train model with only 2 trees for the "two-tree trick"
+    model = LGBMClassifier(n_estimators=2, max_depth=2, random_state=42, verbose=-1)
+    model.fit(X, y)
+
+    constructor = LGBScorecardConstructor(model, X, y)
+
+    # Get per-tree margins
+    margins = constructor.get_leafs(X, output_type="margin")
+    assert margins.shape[1] == 2, "Should have exactly 2 trees"
+
+    # Get total raw prediction
+    raw_pred = model.predict(X, raw_score=True)
+
+    # Per-tree predictions using LightGBM's API
+    tree0_pred = model.predict(X, raw_score=True, start_iteration=0, num_iteration=1)
+    tree1_pred = model.predict(X, raw_score=True, start_iteration=1, num_iteration=1)
+
+    # Verify: sum of per-tree predictions = total raw prediction
+    per_tree_sum = tree0_pred + tree1_pred
+    assert np.allclose(per_tree_sum, raw_pred, rtol=1e-5), (
+        "Per-tree predictions must sum to total raw prediction"
+    )
+
+    # Verify: constructor's get_leafs returns same values
+    assert np.allclose(margins.iloc[:, 0].values, tree0_pred, rtol=1e-5), (
+        "Tree 0 margin from get_leafs must match LightGBM API"
+    )
+    assert np.allclose(margins.iloc[:, 1].values, tree1_pred, rtol=1e-5), (
+        "Tree 1 margin from get_leafs must match LightGBM API"
+    )
+
+    # Verify: margins from get_leafs sum to total
+    margin_sum = margins.sum(axis=1).values
+    assert np.allclose(margin_sum, raw_pred, rtol=1e-5), (
+        "Margins from get_leafs must sum to total raw prediction"
+    )
+
+    # Verify: base_score calculation is correct
+    expected_base_score = np.log(y.mean() / (1 - y.mean()))
+    assert np.isclose(constructor.base_score, expected_base_score, rtol=1e-5), (
+        "Base score should be log-odds of training event rate"
+    )

@@ -103,7 +103,11 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         self.learning_rate = model.learning_rate
         self.max_depth = model.max_depth or -1
 
-        # Calculate base score (prior log-odds)
+        # Calculate base score (prior log-odds from training data)
+        # Note: LightGBM doesn't store base_score in model config like XGBoost.
+        # We calculate it as log-odds of the training event rate, which represents
+        # the prior probability before any tree splits. This is used for scorecard
+        # construction and validation purposes.
         self.base_score = np.log(y.mean() / (1 - y.mean()))
 
         # Initialize scorecard storage
@@ -153,7 +157,13 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         Returns:
             DataFrame with columns [tree_0, tree_1, ..., tree_n]
 
-        Implementation follows XGBoost pattern using LightGBM's predict API.
+        Note on LightGBM margin behavior:
+            Unlike XGBoost where leaf values are deltas added to a separate base_score,
+            LightGBM's per-tree predictions are absolute values that sum directly to
+            the total raw prediction. The per-tree margins from this method will sum
+            to model.predict(X, raw_score=True) without any additional base_score term.
+
+            This is validated in test_two_tree_base_score_validation().
         """
         n_trees = self.booster_.num_trees()
         _colnames = [f"tree_{i}" for i in range(n_trees)]
@@ -163,18 +173,14 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             tree_leaf_idx = self.model.predict(X, pred_leaf=True)
             return pd.DataFrame(tree_leaf_idx, columns=_colnames)
 
-        # For margin output, we need to get raw scores per tree
-        # LightGBM doesn't have direct iteration_range like XGBoost,
-        # so we use num_iteration to get cumulative scores then compute differences
+        # For margin output, get raw scores per tree
+        # Each tree's prediction is returned as-is (no base_score adjustment needed)
         df_leafs = pd.DataFrame()
 
-        # For binary classification, get contributions per tree
-        # Note: This is an approximation - pred_contrib gives feature contributions
-        # For now, we'll use predict with num_iteration to get cumulative scores
         for i in range(n_trees):
             df_leafs[f"tree_{i}"] = self.model.predict(
                 X, raw_score=True, start_iteration=i, num_iteration=1
-            ) - self.base_score * (i == 0)
+            )
 
         return df_leafs
 
