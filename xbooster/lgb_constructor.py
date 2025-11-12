@@ -36,6 +36,7 @@ Example usage (to be implemented):
 import numpy as np
 import pandas as pd
 from lightgbm import LGBMClassifier
+
 from ._utils import calculate_information_value, calculate_weight_of_evidence
 
 # Note: These will be needed when implementing the methods:
@@ -157,11 +158,17 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         Returns:
             DataFrame with columns [tree_0, tree_1, ..., tree_n]
 
-        Note on LightGBM margin behavior:
-            Unlike XGBoost where leaf values are deltas added to a separate base_score,
-            LightGBM's per-tree predictions are absolute values that sum directly to
-            the total raw prediction. The per-tree margins from this method will sum
-            to model.predict(X, raw_score=True) without any additional base_score term.
+        Note on LightGBM margin behavior (sklearn API):
+            This constructor uses LGBMClassifier (sklearn API), where leaf values
+            are pure deltas similar to XGBoost. The sklearn wrapper does NOT integrate
+            base_score into the first tree's leaf values.
+
+            The internal booster API (lgb.train with init_score) behaves differently:
+            when boost_from_average=True, the base_score IS integrated into the first
+            tree's leaf values. See: https://github.com/microsoft/LightGBM/issues/3058
+
+            For sklearn API: per-tree margins sum directly to model.predict(X, raw_score=True)
+            without any base_score adjustment needed.
 
             This is validated in test_two_tree_base_score_validation().
         """
