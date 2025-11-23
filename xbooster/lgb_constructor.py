@@ -107,8 +107,13 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         # Calculate base score (prior log-odds from training data)
         # Note: LightGBM doesn't store base_score in model config like XGBoost.
         # We calculate it as log-odds of the training event rate, which represents
-        # the prior probability before any tree splits. This is used for scorecard
-        # construction and validation purposes.
+        # the prior probability before any tree splits.
+        #
+        # IMPORTANT: For LightGBM sklearn API, base_score is REQUIRED for create_points():
+        # - The first tree's leaf values include base_score implicitly
+        # - We subtract base_score from Tree 0 to normalize all trees to the same scale
+        # - Then add logit(base_score) during scaling to distribute it across all trees
+        # - This ensures each tree contributes proportionally to the final scorecard
         self.base_score = np.log(y.mean() / (1 - y.mean()))
 
         # Initialize scorecard storage
@@ -177,6 +182,9 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
 
         if output_type == "leaf_index":
             # Predict leaf indices for all trees
+            # NOTE: LightGBM's predict(pred_leaf=True) returns leaf indices that already
+            # correspond to the relative leaf order (0, 1, 2...) within each tree.
+            # This matches the "relative_leaf_index" we create in extract_leaf_weights().
             tree_leaf_idx = self.model.predict(X, pred_leaf=True)
             return pd.DataFrame(tree_leaf_idx, columns=_colnames)
 
@@ -225,8 +233,11 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         leaf_nodes = tree_df[tree_df["split_feature"].isna()][
             ["tree_index", "node_index", "value"]
         ].copy()
-        # Make leaf index relative within each tree
-        leaf_nodes["relative_leaf_index"] = leaf_nodes.groupby("tree_index").cumcount()
+        # Extract leaf number from node_index (e.g., "0-L2" -> 2)
+        # This matches the leaf_id returned by predict(pred_leaf=True)
+        leaf_nodes["relative_leaf_index"] = (
+            leaf_nodes["node_index"].str.extract(r"-L(\d+)")[0].astype(int)
+        )
 
         # Helper function to merge decision nodes with leaf values
         def merge_and_format(decisions, leafs, child_column, sign):
@@ -366,7 +377,8 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         target_points: int = 600,
         target_odds: int = 19,
         precision_points: int = 0,
-        score_type: str = "LGBValue",
+        score_type: str = "XAddEvidence",  # Only XAddEvidence is supported
+        use_base_score: bool = True,
     ) -> pd.DataFrame:
         """
         Create points from scorecard using PDO (Points to Double Odds) scaling.
@@ -376,18 +388,134 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             target_points: Points at target odds
             target_odds: Target odds ratio
             precision_points: Decimal precision for points
-            score_type: Column name for score values
+            score_type: Must be 'XAddEvidence' (only supported type for LightGBM)
+            use_base_score: If True, normalize Tree 0 by subtracting base_score and add
+                logit(base_score) during scaling. This ensures all trees contribute
+                proportionally. Default: True (recommended).
 
         Returns:
             DataFrame with Points column added
 
-        Implementation notes:
-        - Formula: Points = (target_points - (pdo/ln(2)) * (ln(odds) - ln(target_odds)))
-        - Apply to leaf values or WOE scores
+        Note:
+            LightGBM sklearn API includes base_score in the first tree's leaf values.
+            When use_base_score=True (default), we normalize this by:
+            1. Subtracting base_score from Tree 0 leaves
+            2. Adding logit(base_score) during scaling to distribute across all trees
 
-        TODO: Implement this method following XGBoost pattern
+            This ensures all trees contribute proportionally to the final score.
+            Set use_base_score=False to skip this normalization (not recommended).
         """
-        raise NotImplementedError("create_points() method needs to be implemented")
+        # Store parameters
+        self.pdo = pdo
+        self.target_points = target_points
+        self.target_odds = target_odds
+        self.precision_points = precision_points
+        self.score_type = score_type
+
+        if score_type != "XAddEvidence":
+            raise ValueError(
+                "Only 'XAddEvidence' score_type is supported for LightGBM. "
+                "WOE-based scoring is not recommended due to base_score normalization issues."
+            )
+
+        if self.lgb_scorecard is None:
+            raise ValueError("No scorecard has been created yet. Call construct_scorecard() first.")
+
+        # Calculate scaling factor
+        factor = pdo / np.log(2)
+        offset = target_points - factor * np.log(target_odds)
+
+        # Create scorecard with points
+        scdf = self.lgb_scorecard.copy()
+
+        # Normalize Tree 0 by subtracting base_score (if enabled)
+        if use_base_score:
+            # IMPORTANT: LightGBM sklearn API includes base_score in the first tree's leaves.
+            # We need to subtract base_score from Tree 0 to normalize all trees to the same scale.
+            # This ensures each tree gets proportional weight in the scorecard (like XGBoost).
+            scdf["Score"] = scdf.apply(
+                lambda row: row["XAddEvidence"] - self.base_score
+                if row["Tree"] == 0
+                else row["XAddEvidence"],
+                axis=1,
+            )
+        else:
+            # Use XAddEvidence directly without normalization
+            scdf["Score"] = scdf["XAddEvidence"]
+
+        # Scale the scores
+        def logit(p):
+            return np.log(p / (1 - p))
+
+        if use_base_score:
+            # Add logit(base_score) to distribute across all trees
+            base_score_prob = np.exp(self.base_score) / (1 + np.exp(self.base_score))
+            scdf["ScaledScore"] = factor * scdf["Score"] + logit(base_score_prob)
+        else:
+            # Simple scaling without base_score adjustment
+            scdf["ScaledScore"] = factor * scdf["Score"]
+
+        # Set the index to Tree number
+        scdf.set_index("Tree", inplace=True)
+
+        # Get the maximum score for each tree
+        var_offsets = scdf.groupby("Tree")["ScaledScore"].max()
+
+        # Calculate shift base points (same logic as XGBoost)
+        shft_base_pts = (var_offsets.sum() - offset) / len(var_offsets)
+
+        # Calculate points with negative sign to invert (higher logit = lower score = lower risk)
+        # This matches XGBoost's formula: -ScaledScore + var_offsets - shft_base_pts
+        shift_sc = -scdf["ScaledScore"] + scdf.index.map(var_offsets) - shft_base_pts
+        scdf["Points"] = shift_sc.round(precision_points)
+
+        # Reset index
+        scdf.reset_index(inplace=True)
+
+        # Store the scorecard with points
+        self.lgb_scorecard_with_points = scdf
+
+        return scdf
+
+    def _convert_tree_to_points(self, X: pd.DataFrame) -> pd.DataFrame:  # pylint: disable=C0103
+        """
+        Convert leaf indices to points for scoring.
+
+        Args:
+            X: Input features
+
+        Returns:
+            DataFrame with per-tree scores and total score
+        """
+        if self.lgb_scorecard_with_points is None:
+            raise ValueError(
+                "No scorecard with points has been created yet. Call create_points() first."
+            )
+
+        # Get leaf indices for all trees
+        X_leaf_indices = self.get_leafs(X, output_type="leaf_index")
+
+        result = pd.DataFrame()
+        for col in X_leaf_indices.columns:
+            tree_number = col.split("_")[1]
+            # Get points for this tree
+            subset_points_df = self.lgb_scorecard_with_points[
+                self.lgb_scorecard_with_points["Tree"] == int(tree_number)
+            ].copy()
+
+            # Merge leaf indices with points
+            merged_df = pd.merge(
+                X_leaf_indices[[col]].round(4),
+                subset_points_df[["Node", "Points"]],
+                left_on=col,
+                right_on="Node",
+                how="left",
+            )
+            result[f"Score_{tree_number}"] = merged_df["Points"]
+
+        # Add total score
+        result = pd.concat([result, result.sum(axis=1).rename("Score")], axis=1)
+        return result
 
     def predict_score(self, X: pd.DataFrame) -> pd.Series:  # pylint: disable=C0103
         """
@@ -399,14 +527,13 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         Returns:
             Series of credit scores
 
-        Implementation notes:
-        - Map observations to leaf nodes using predict(pred_leaf=True)
-        - Look up points from scorecard
-        - Sum across trees
-
-        TODO: Implement this method following XGBoost pattern
+        Implementation:
+        - Maps observations to leaf nodes using predict(pred_leaf=True)
+        - Looks up points from scorecard
+        - Sums across trees
         """
-        raise NotImplementedError("predict_score() method needs to be implemented")
+        points_df = self._convert_tree_to_points(X)
+        return pd.Series(points_df["Score"], name="Score")
 
     def predict_scores(self, X: pd.DataFrame) -> pd.DataFrame:  # pylint: disable=C0103
         """
@@ -417,10 +544,8 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
 
         Returns:
             DataFrame with tree-level score breakdowns
-
-        TODO: Implement this method following XGBoost pattern
         """
-        raise NotImplementedError("predict_scores() method needs to be implemented")
+        return self._convert_tree_to_points(X)
 
     @property
     def sql_query(self) -> str:
