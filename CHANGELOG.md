@@ -1,6 +1,13 @@
 # Changelog
 
-## [0.2.7rc1] - 2025-11-23 (Release Candidate)
+## [0.2.7rc2] - 2025-11-23 (Release Candidate)
+
+### Fixed
+- **Complete Implementation**: Added missing `create_points()` and `predict_score()` methods
+  - Previous rc1 release had incomplete squash merge
+  - Now includes all critical bug fixes and implementations
+
+## [0.2.7rc1] - 2025-11-23 (Release Candidate - Incomplete)
 
 ### Added
 - **LightGBM Scorecard Support**: Complete implementation of `LGBScorecardConstructor`
