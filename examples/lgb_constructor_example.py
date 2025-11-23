@@ -1,50 +1,51 @@
 """
-Example: Using LGBScorecardConstructor
+LGBScorecardConstructor - Minimal Example
 
-This example demonstrates how to use the LightGBM scorecard constructor
-and inspect its outputs. Currently implements extract_leaf_weights() and get_leafs().
+Demonstrates the core functionality of LightGBM scorecard constructor.
+Status: Alpha - 3 of 5 methods implemented (PR #8)
 
-Status: Alpha - Partial implementation
+Implemented:
+  ✅ extract_leaf_weights() - Extract tree structure and leaf values
+  ✅ get_leafs() - Get leaf indices or margins for new data
+  ✅ construct_scorecard() - Create scorecard with WOE/IV metrics
+
+To be implemented:
+  ⏳ create_points() - Apply PDO scaling
+  ⏳ predict_score() - Score new data using scorecard
 """
 
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
 from lightgbm import LGBMClassifier
+from scipy.stats import kendalltau, spearmanr
 from sklearn.model_selection import train_test_split
 
 from xbooster.lgb_constructor import LGBScorecardConstructor
 
-# Set random seed for reproducibility
 np.random.seed(42)
 
 # ============================================================================
-# 1. Create Sample Dataset
+# 1. Create Dataset
 # ============================================================================
 print("=" * 80)
-print("1. Creating Sample Dataset")
+print("LGBScorecardConstructor - Testing Progress")
 print("=" * 80)
+print()
 
-n_samples = 1000
+n_samples = 500
 X = pd.DataFrame(
     {
         "age": np.random.randint(18, 70, n_samples),
         "income": np.random.randint(20000, 150000, n_samples),
         "debt_ratio": np.random.uniform(0, 1, n_samples),
-        "credit_history": np.random.uniform(0, 30, n_samples),
-        "employment_years": np.random.randint(0, 40, n_samples),
     }
 )
 
-# Create target variable with some relationship to features
-y = pd.Series(
-    ((X["debt_ratio"] > 0.5) | (X["income"] < 40000) | (X["credit_history"] < 5)).astype(int)
-)
+y = pd.Series(((X["debt_ratio"] > 0.5) | (X["income"] < 40000)).astype(int))
+y ^= (np.random.random(n_samples) < 0.1).astype(int)
 
-# Add some noise
-y = y ^ (np.random.random(n_samples) < 0.1).astype(int)
-
-print(f"Dataset shape: {X.shape}")
-print(f"Target distribution: {y.value_counts().to_dict()}")
+print(f"Dataset: {X.shape[0]} samples, {X.shape[1]} features")
 print(f"Event rate: {y.mean():.2%}")
 print()
 
@@ -83,7 +84,6 @@ print(f"Test accuracy: {test_score:.4f}")
 print(f"Number of trees: {model.n_estimators}")
 print(f"Max depth: {model.max_depth}")
 print(f"Learning rate: {model.learning_rate}")
-print()
 
 # ============================================================================
 # 3. Initialize LGBScorecardConstructor
@@ -98,7 +98,6 @@ print(f"Base score (log-odds): {constructor.base_score:.6f}")
 print(f"Number of estimators: {constructor.n_estimators}")
 print(f"Learning rate: {constructor.learning_rate}")
 print(f"Max depth: {constructor.max_depth}")
-print()
 
 # ============================================================================
 # 4. Extract Leaf Weights
@@ -133,12 +132,6 @@ feature_counts = leaf_weights.groupby("Feature").size().sort_values(ascending=Fa
 print(feature_counts)
 print()
 
-# Check value ranges
-print("XAddEvidence range by tree:")
-value_ranges = leaf_weights.groupby("Tree")["XAddEvidence"].agg(["min", "max", "mean"])
-print(value_ranges)
-print()
-
 # ============================================================================
 # 5. Get Leaf Indices for Test Data
 # ============================================================================
@@ -159,7 +152,7 @@ print()
 print("Unique leaf indices per tree:")
 for col in leaf_indices.columns:
     unique_leaves = leaf_indices[col].nunique()
-    print(f"  {col}: {unique_leaves} unique leaves")
+    print(f"{col}: {unique_leaves} unique leaves")
 print()
 
 # ============================================================================
@@ -239,31 +232,154 @@ print(f"Total nodes: {len(tree_0_structure)} ({len(split_nodes)} split + {len(le
 print()
 
 # ============================================================================
-# 8. Feature Importance Analysis
+# 8. Construct Scorecard with WOE and IV
 # ============================================================================
 print("=" * 80)
-print("8. Feature Importance from Leaf Weights")
+print("8. Constructing Scorecard with WOE/IV")
+print("=" * 80)
+
+scorecard = constructor.construct_scorecard()
+
+print(f"Scorecard shape: {scorecard.shape}")
+print(f"Columns: {scorecard.columns.tolist()}")
+print()
+
+print("First 10 rows of scorecard:")
+print(scorecard.head(10))
+print()
+
+print("Scorecard summary statistics:")
+print(scorecard[["Count", "Events", "NonEvents", "EventRate", "WOE", "IV"]].describe())
+print()
+
+# ============================================================================
+# 8.1. Correlation Analysis: XAddEvidence vs WOE
+# ============================================================================
+print("=" * 80)
+print("8.1. Correlation Analysis: XAddEvidence vs WOE")
+print("=" * 80)
+
+# Calculate Spearman correlation
+spearman_corr, spearman_pval = spearmanr(scorecard["XAddEvidence"], scorecard["WOE"])
+print(f"Spearman correlation: {spearman_corr:.6f} (p-value: {spearman_pval:.6e})")
+
+# Calculate Kendall's tau correlation
+kendall_corr, kendall_pval = kendalltau(scorecard["XAddEvidence"], scorecard["WOE"])
+print(f"Kendall's tau correlation: {kendall_corr:.6f} (p-value: {kendall_pval:.6e})")
+
+# ============================================================================
+# 8.1a. Verification: Tree Margins Sum Correctly
+# ============================================================================
+print("=" * 80)
+print("8.1a. Verification: Tree Margins Sum to Total Prediction")
+print("=" * 80)
+
+# Get leaf margins for training data - each tree is a separate column
+train_margins = constructor.get_leafs(X_train, output_type="margin")
+print(f"Margin matrix shape: {train_margins.shape} (samples × trees)")
+print(f"Columns (trees): {train_margins.columns.tolist()}")
+print()
+
+# Show first few rows
+print("First 5 samples of per-tree margins:")
+print(train_margins.head())
+print()
+
+# Calculate expected log-odds from training data
+train_event_rate = y_train.mean()
+expected_log_odds = np.log(train_event_rate / (1 - train_event_rate))
+
+print("Base Score Information:")
+print(f"Training event rate: {train_event_rate:.6f}")
+print(
+    f"Expected log-odds: log({train_event_rate:.6f} / {1 - train_event_rate:.6f}) = {expected_log_odds:.6f}"
+)
+print(f"LightGBM base_score (calculated): {constructor.base_score:.6f}")
+print()
+
+# Verify that margins sum to total prediction
+margin_sum = train_margins.sum(axis=1)
+raw_pred = model.predict(X_train, raw_score=True)
+
+print("Verification:")
+print(f"  Margin sum (first 5): {margin_sum.values[:5]}")
+print(f"  Raw prediction (first 5): {raw_pred[:5]}")
+print(f"  Margins sum correctly: {np.allclose(margin_sum, raw_pred)}")
+print()
+
+print("Note on LightGBM behavior:")
+print("  • LightGBM tree values are absolute predictions (not deltas like XGBoost)")
+print("  • Tree margins sum directly to total raw score")
+print("  • First tree contains learned predictions, not just base_score")
+print()
+
+# ============================================================================
+# 8.2. Tree Visualization and Scorecard Comparison
+# ============================================================================
+print("=" * 80)
+print("8.2. Tree Visualization and Scorecard Comparison for Tree 0")
+print("=" * 80)
+
+# Create tree digraph
+print("Generating tree visualization for Tree 0...")
+tree_graph = lgb.create_tree_digraph(model, tree_index=0, precision=6)
+
+# Display the graph (this will create a visual representation)
+# In Jupyter notebooks, this would render inline
+# In scripts, it can be saved to file
+print("Tree digraph created (use tree_graph.render() to save to file)")
+print()
+
+# Show corresponding scorecard entries for Tree 0
+print("Scorecard entries for Tree 0:")
+tree_0_scorecard = scorecard[scorecard["Tree"] == 0].copy()
+print(tree_0_scorecard.to_string(index=False))
+print()
+
+# Summary statistics for Tree 0
+print("Tree 0 Summary:")
+print(f"  Number of splits: {len(tree_0_scorecard)}")
+print(f"  Total observations: {tree_0_scorecard['Count'].sum():.0f}")
+print(f"  Total IV: {tree_0_scorecard['IV'].sum():.4f}")
+print(f"  WOE range: [{tree_0_scorecard['WOE'].min():.4f}, {tree_0_scorecard['WOE'].max():.4f}]")
+print(
+    f"  XAddEvidence range: [{tree_0_scorecard['XAddEvidence'].min():.4f}, {tree_0_scorecard['XAddEvidence'].max():.4f}]"
+)
+print()
+
+# ============================================================================
+# 9. Feature Importance Analysis from Scorecard
+# ============================================================================
+print("=" * 80)
+print("9. Feature Importance from Scorecard")
 print("=" * 80)
 
 # Count how many times each feature appears in splits
 feature_importance = (
-    leaf_weights.groupby("Feature")
-    .agg({"XAddEvidence": ["count", "mean", "std", "min", "max"]})
+    scorecard.groupby("Feature")
+    .agg(
+        {
+            "Count": "sum",  # Total observations
+            "IV": "sum",  # Total information value
+            "WOE": "mean",  # Average WOE
+            "XAddEvidence": ["count", "mean"],  # Split count and avg contribution
+        }
+    )
     .round(4)
 )
 
-feature_importance.columns = ["Count", "Mean_Value", "Std_Value", "Min_Value", "Max_Value"]
-feature_importance = feature_importance.sort_values("Count", ascending=False)
+feature_importance.columns = ["Total_Obs", "Total_IV", "Avg_WOE", "Split_Count", "Avg_Contribution"]
+feature_importance = feature_importance.sort_values("Total_IV", ascending=False)
 
-print("Feature importance based on split frequency:")
+print("Feature importance ranked by Information Value:")
 print(feature_importance)
 print()
 
 # ============================================================================
-# 9. Compare with Native LightGBM Predictions
+# 10. Compare with Native LightGBM Predictions
 # ============================================================================
 print("=" * 80)
-print("9. Comparing with Native LightGBM Predictions")
+print("10. Comparing with Native LightGBM Predictions")
 print("=" * 80)
 
 # Get predictions
@@ -290,36 +406,8 @@ print(f"Manual probability calculation matches: {np.allclose(manual_proba, pred_
 print()
 
 # ============================================================================
-# 10. Summary
+# 11. Summary
 # ============================================================================
-print("=" * 80)
-print("10. Summary")
-print("=" * 80)
-
-print("✓ Successfully created LGBScorecardConstructor")
-print("✓ Extracted leaf weights from LightGBM model")
-print("✓ Retrieved leaf indices for test data")
-print("✓ Retrieved margins (raw scores) for test data")
-print("✓ Verified margin calculations match LightGBM's raw predictions")
-print()
-
-print("Currently implemented methods:")
-print("  - extract_leaf_weights(): Extract tree structure and leaf values")
-print("  - get_leafs(): Get leaf indices or margins for new data")
-print()
-
-print("Methods still to be implemented:")
-print("  - construct_scorecard(): Combine leaf weights with event statistics")
-print("  - create_points(): Apply PDO (Points to Double Odds) scaling")
-print("  - predict_score(): Score new data using the scorecard")
-print()
-
-print("Next steps for full implementation:")
-print("  1. Implement construct_scorecard() to calculate WOE/IV")
-print("  2. Implement create_points() for credit score calculation")
-print("  3. Implement predict_score() for inference")
-print("  4. Add SQL query generation for deployment")
-print()
 
 print("=" * 80)
 print("Example completed successfully!")
