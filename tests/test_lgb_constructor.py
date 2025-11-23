@@ -71,7 +71,7 @@ def test_lgb_constructor_has_required_methods(trained_lgb_model, sample_data):
 
 
 def test_lgb_constructor_methods_raise_not_implemented(trained_lgb_model, sample_data):
-    """Test that stub methods raise NotImplementedError."""
+    """Test that implemented methods work correctly."""
     X, y = sample_data
     constructor = LGBScorecardConstructor(trained_lgb_model, X, y)
 
@@ -89,12 +89,26 @@ def test_lgb_constructor_methods_raise_not_implemented(trained_lgb_model, sample
     except NotImplementedError:
         pytest.fail("get_leafs should be implemented")
 
-    # These methods are still stubs
-    with pytest.raises(NotImplementedError):
-        constructor.create_points()
+    # Test construct_scorecard, create_points, and predict_score
+    try:
+        scorecard = constructor.construct_scorecard()
+        assert len(scorecard) > 0
+        assert "XAddEvidence" in scorecard.columns
+    except NotImplementedError:
+        pytest.fail("construct_scorecard should be implemented")
 
-    with pytest.raises(NotImplementedError):
-        constructor.predict_score(X)
+    try:
+        scorecard_with_points = constructor.create_points()
+        assert len(scorecard_with_points) > 0
+        assert "Points" in scorecard_with_points.columns
+    except NotImplementedError:
+        pytest.fail("create_points should be implemented")
+
+    try:
+        scores = constructor.predict_score(X)
+        assert len(scores) == len(X)
+    except NotImplementedError:
+        pytest.fail("predict_score should be implemented")
 
 
 def test_lgb_constructor_model_type(trained_lgb_model, sample_data):
