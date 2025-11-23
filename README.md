@@ -1,6 +1,6 @@
 # xbooster 🚀
 
-A scorecard-format famework for logistic regression tasks with gradient-boosted decision trees (XGBoost and CatBoost).
+A scorecard-format framework for logistic regression tasks with gradient-boosted decision trees (XGBoost, LightGBM, and CatBoost).
 xbooster allows to convert a classification model into a logarithmic (point) scoring system.
 
 In addition, it provides a suite of interpretability tools to understand the model's behavior.
@@ -217,6 +217,89 @@ The `DataPreprocessor` provides:
 2. Proper handling of missing values
 3. Generation of interaction constraints for XGBoost
 4. Consistent feature naming for scorecard generation
+
+### LightGBM Support 💡 (Release Candidate)
+
+xbooster provides support for LightGBM models with scorecard functionality. Here's how to use it:
+
+```python
+import pandas as pd
+import lightgbm as lgb
+from xbooster.constructor import LGBScorecardConstructor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_auc_score
+
+# Load data
+url = "https://github.com/xRiskLab/xBooster/raw/main/examples/data/credit_data.parquet"
+dataset = pd.read_parquet(url)
+
+features = [
+    "external_risk_estimate",
+    "revolving_utilization_of_unsecured_lines",
+    "account_never_delinq_percent",
+    "net_fraction_revolving_burden",
+    "num_total_cc_accounts",
+    "average_months_in_file",
+]
+
+target = "is_bad"
+X, y = dataset[features], dataset[target]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.3, random_state=62, stratify=y
+)
+
+# Train LightGBM model
+model = lgb.LGBMClassifier(
+    n_estimators=50,
+    learning_rate=0.55,
+    max_depth=1,
+    num_leaves=2,
+    min_child_samples=10,
+    random_state=62,
+    verbose=-1,
+)
+model.fit(X_train, y_train)
+
+# Initialize LGBScorecardConstructor
+constructor = LGBScorecardConstructor(model, X_train, y_train)
+
+# Construct scorecard
+scorecard = constructor.construct_scorecard()
+print(scorecard.head())
+
+# Create points with base score normalization (default)
+scorecard_with_points = constructor.create_points(
+    pdo=50,
+    target_points=600,
+    target_odds=19,
+    precision_points=0,
+    use_base_score=True  # Ensures proper tree contribution balancing
+)
+
+# Make predictions
+credit_scores = constructor.predict_score(X_test)
+
+# Calculate Gini
+gini = roc_auc_score(y_test, -credit_scores) * 2 - 1
+print(f"Scorecard Gini: {gini:.4f}")
+
+# Compare with model predictions
+model_gini = roc_auc_score(y_test, model.predict_proba(X_test)[:, 1]) * 2 - 1
+print(f"Model Gini: {model_gini:.4f}")
+```
+
+**Key Features:**
+- **Scorecard Construction**: Implementation of `create_points()` and `predict_score()`
+- **Base Score Normalization**: Proper handling of LightGBM's base score for balanced tree contributions
+- **High Discrimination**: Scorecard Gini closely matches model Gini
+- **Flexible**: `use_base_score` parameter for optional base score normalization
+
+**Important Notes:**
+- **Release Candidate**: This feature is in testing phase - feedback welcome!
+- LightGBM's sklearn API handles base_score differently than XGBoost
+- The `use_base_score=True` parameter (default) ensures proper normalization
+- Only `XAddEvidence` score type is supported (WOE not applicable)
 
 ### CatBoost Support 🐱 (Beta)
 

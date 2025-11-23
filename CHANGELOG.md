@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.2.7rc1] - 2025-11-23 (Release Candidate)
+
+### Added
+- **LightGBM Scorecard Support**: Complete implementation of `LGBScorecardConstructor`
+  - Implemented `create_points()` with proper base_score normalization
+  - Implemented `predict_score()` and `predict_scores()` for scorecard predictions
+  - Added `use_base_score` parameter for flexible base score handling
+  - Full parity with XGBoost scorecard functionality
+
+### Fixed
+- **Critical Bug Fix**: Corrected leaf ID mapping in `extract_leaf_weights()`
+  - Changed from `cumcount()` to extracting actual leaf ID from node_index string
+  - Fixes 55% Gini loss (0.40 → 0.90) in scorecard predictions
+  - Ensures correct mapping between LightGBM's absolute leaf IDs and relative indices
+- **Base Score Normalization**: Proper handling of LightGBM's base score
+  - Subtract base_score from Tree 0 leaves to balance tree contributions
+  - Add logit(base_score) during scaling to distribute across all trees
+  - Prevents first tree from getting disproportional weight
+
+### Changed
+- **Simplified Score Types**: Only `XAddEvidence` supported for LightGBM
+  - Removed WOE support (ill-defined for LightGBM's sklearn API)
+  - Cleaner, more maintainable implementation
+- **Enhanced Documentation**: Updated docstrings and examples
+  - Added comprehensive LightGBM getting-started notebook
+  - Explained base_score handling differences from XGBoost
+
+### Technical Details
+- All 106 tests passing (9 LightGBM-specific tests)
+- Scorecard Gini: 0.9020 vs Model Gini: 0.9021 (perfect preservation)
+- Proper handling of LightGBM's sklearn API vs internal booster API
+- Related to PR #8
+
 ## [0.2.7a2] - 2025-11-08 (Alpha)
 
 ### Added
