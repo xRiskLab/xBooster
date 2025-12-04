@@ -42,7 +42,7 @@ class CatBoostScorecardConstructor:
         Args:
             model: Trained CatBoostClassifier
             pool: CatBoost Pool object used for training/validation
-            use_woe: If True, use WOE values; if False, use LeafValue (default: False)
+            use_woe: If True, use WOE values; if False, use XAddEvidence (default: False)
             points_column: If provided, use this column for scoring
         """
         self.model = model
@@ -191,7 +191,7 @@ class CatBoostScorecardConstructor:
                 "NonEvents",
                 "Events",
                 "EventRate",
-                "LeafValue",
+                "XAddEvidence",
                 "WOE",
                 "IV",
                 "DetailedSplit",
@@ -229,7 +229,7 @@ class CatBoostScorecardConstructor:
         Args:
             features: DataFrame or dictionary of feature values
             method: Scoring method to use:
-                - 'raw': Use original LeafValue
+                - 'raw': Use original XAddEvidence
                 - 'woe': Use Weight of Evidence values
                 - 'pdo': Use points-based scoring
 
@@ -253,7 +253,7 @@ class CatBoostScorecardConstructor:
 
             # Set the appropriate value column based on method
             if method == "raw":
-                original_mapper.value_column = "LeafValue"
+                original_mapper.value_column = "XAddEvidence"
                 original_mapper.use_woe = False
             else:
                 original_mapper.value_column = "WOE"
@@ -340,7 +340,7 @@ class CatBoostScorecardConstructor:
         if "Bin" not in table.columns:
             table["Bin"] = table["Condition"]
 
-        # Add Value column based on WOE or LeafValue
+        # Add Value column based on WOE or XAddEvidence
         value_col = self.mapper.get_value_column()
         table["Value"] = table[value_col]
 
@@ -386,7 +386,7 @@ class CatBoostScorecardConstructor:
         factor = pdo / np.log(2)
         offset = target_points - factor * np.log(base_odds)
 
-        # Raw contribution score from WOE or LeafValue
+        # Raw contribution score from WOE or XAddEvidence
         scorecard["RawScore"] = -factor * scorecard[value_col]
 
         n_trees = len(scorecard["Tree"].unique())

@@ -442,7 +442,7 @@ class CatBoostTreeVisualizer:
                         f"count: {int(row['Count'])}\n"
                         f"rate: {row['EventRate']:.3f}\n"
                         f"woe: {row['WOE']:.3f}\n"
-                        f"val: {row['LeafValue']:.3f}"
+                        f"val: {row['XAddEvidence']:.3f}"
                     ),
                     "depth": level,
                     "is_leaf": True,

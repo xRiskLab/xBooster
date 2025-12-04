@@ -165,19 +165,19 @@ def test_get_binned_feature_table(woe_mapper):
     assert isinstance(table, pd.DataFrame)
     assert not table.empty
 
-    required_columns = {"Feature", "Condition", "LeafValue", "Weight", "TreeCount"}
+    required_columns = {"Feature", "Condition", "XAddEvidence", "Weight", "TreeCount"}
     assert set(table.columns) >= required_columns
 
     assert table["Feature"].dtype == object
     assert table["Condition"].dtype == object
-    assert table["LeafValue"].dtype == np.float64
+    assert table["XAddEvidence"].dtype == np.float64
     assert table["Weight"].dtype == np.float64
     assert table["TreeCount"].dtype == np.int64
 
 
 def test_get_value_column(woe_mapper):
     """Test the get_value_column method."""
-    assert woe_mapper.get_value_column() == "LeafValue"
+    assert woe_mapper.get_value_column() == "XAddEvidence"
 
     woe_mapper.points_column = "Points"
     assert woe_mapper.get_value_column() == "Points"

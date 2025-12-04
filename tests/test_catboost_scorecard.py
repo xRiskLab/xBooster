@@ -60,10 +60,9 @@ def test_trees_to_scorecard(trained_model: CatBoostClassifier, test_pool: Pool):
         "NonEvents",
         "Events",
         "EventRate",
-        "LeafValue",
+        "XAddEvidence",
         "WOE",
         "IV",
-        "xAddEvidence",
         "CountPct",
         "DetailedSplit",
     }
@@ -77,10 +76,9 @@ def test_trees_to_scorecard(trained_model: CatBoostClassifier, test_pool: Pool):
     assert scorecard["NonEvents"].dtype == np.float64
     assert scorecard["Events"].dtype == np.float64
     assert scorecard["EventRate"].dtype == np.float64
-    assert scorecard["LeafValue"].dtype == np.float64
+    assert scorecard["XAddEvidence"].dtype == np.float64
     assert scorecard["WOE"].dtype == np.float64
     assert scorecard["IV"].dtype == np.float64
-    assert scorecard["xAddEvidence"].dtype == np.float64
     assert scorecard["CountPct"].dtype == np.float64
 
     # Check for valid values

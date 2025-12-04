@@ -270,7 +270,7 @@ def test_construct_scorecard(scorecard_constructor):
         "IV",
         "CountPct",
         "DetailedSplit",
-        "LeafValue",
+        "XAddEvidence",
     }
     assert set(scorecard.columns).issuperset(required_columns)
 
@@ -288,7 +288,7 @@ def test_construct_scorecard(scorecard_constructor):
     assert scorecard["IV"].dtype == np.float64
     assert scorecard["CountPct"].dtype == np.float64
     assert scorecard["DetailedSplit"].dtype == object
-    assert scorecard["LeafValue"].dtype == np.float64
+    assert scorecard["XAddEvidence"].dtype == np.float64
 
     # Check for valid values
     assert scorecard["Count"].min() >= 0
@@ -453,7 +453,7 @@ def test_get_scorecard(trained_model, catboost_pool):
     assert not scorecard.empty
     assert "Tree" in scorecard.columns
     assert "LeafIndex" in scorecard.columns
-    assert "LeafValue" in scorecard.columns
+    assert "XAddEvidence" in scorecard.columns
     assert "DetailedSplit" in scorecard.columns
 
 

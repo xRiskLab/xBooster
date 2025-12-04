@@ -15,13 +15,13 @@ import pandas as pd
 
 class CatBoostWOEMapper:
     """
-    Maps features to their WOE/LeafValue from CatBoost scorecard and enables scorecard-based inference.
+    Maps features to their WOE/XAddEvidence from CatBoost scorecard and enables scorecard-based inference.
 
     This class provides functionality to:
-    1. Map features to their corresponding WOE or LeafValue based on tree structure
-    2. Calculate feature importance based on WOE/LeafValue contributions
+    1. Map features to their corresponding WOE or XAddEvidence based on tree structure
+    2. Calculate feature importance based on WOE/XAddEvidence contributions
     3. Transform data using the generated mapping
-    4. Perform inference (prediction) using sum of WOE/LeafValue across trees
+    4. Perform inference (prediction) using sum of WOE/XAddEvidence across trees
     5. Analyze and visualize feature contributions to the final score
     """
 
@@ -36,12 +36,12 @@ class CatBoostWOEMapper:
 
         Args:
             scorecard_df: DataFrame containing CatBoost tree structure and metrics
-            use_woe: If True, use WOE values; if False, use LeafValue (default: False)
+            use_woe: If True, use WOE values; if False, use XAddEvidence (default: False)
             points_column: If provided, use this column for scoring
         """
         self.scorecard: pd.DataFrame = scorecard_df
         self.use_woe: bool = use_woe
-        self.value_column: str = "WOE" if use_woe else "LeafValue"
+        self.value_column: str = "WOE" if use_woe else "XAddEvidence"
         self.points_column: Optional[str] = points_column
 
         self.tree_indices: List[int] = []
@@ -59,7 +59,7 @@ class CatBoostWOEMapper:
         self.enhanced_scorecard: Optional[pd.DataFrame] = None
 
     def get_value_column(self) -> str:
-        """Return the column name to use for values (points, WOE, or LeafValue)."""
+        """Return the column name to use for values (points, WOE, or XAddEvidence)."""
         return self.points_column or self.value_column
 
     def _preprocess_scorecard(self) -> None:
@@ -103,7 +103,7 @@ class CatBoostWOEMapper:
     ) -> Dict[str, Dict[str, Dict[str, Union[List[float], List[int], float]]]]:
         """
         Analyze the scorecard to generate mappings for each feature.
-        This maps feature conditions to their corresponding WOE/LeafValue.
+        This maps feature conditions to their corresponding WOE/XAddEvidence.
 
         Returns:
             Dictionary of feature mappings
@@ -215,7 +215,7 @@ class CatBoostWOEMapper:
 
     def transform_instance(self, features: Dict[str, Any]) -> Dict[str, float]:
         """
-        Transform a single instance by mapping features to their WOE/LeafValue.
+        Transform a single instance by mapping features to their WOE/XAddEvidence.
 
         Args:
             features: Dictionary of feature name -> value
@@ -261,7 +261,7 @@ class CatBoostWOEMapper:
 
     def transform_dataset(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Transform an entire dataset by mapping features to WOE/LeafValue.
+        Transform an entire dataset by mapping features to WOE/XAddEvidence.
 
         Args:
             df: DataFrame with original features
@@ -346,7 +346,7 @@ class CatBoostWOEMapper:
     def get_binned_feature_table(self) -> pd.DataFrame:
         """
         Create a binned feature table for reporting and analysis.
-        Shows how different bins/ranges of each feature map to WOE/LeafValue.
+        Shows how different bins/ranges of each feature map to WOE/XAddEvidence.
 
         Returns:
             DataFrame with binned feature information
@@ -374,14 +374,14 @@ class CatBoostWOEMapper:
         )
 
     def get_value_type(self) -> str:
-        """Return the type of value being used (Points, WOE, or LeafValue)."""
-        return "Points" if self.points_column else ("WOE" if self.use_woe else "LeafValue")
+        """Return the type of value being used (Points, WOE, or XAddEvidence)."""
+        return "Points" if self.points_column else ("WOE" if self.use_woe else "XAddEvidence")
 
     def plot_feature_importance(
         self, figsize: Tuple[int, int] = (12, 8), top_n: Optional[int] = None
     ) -> None:
         """
-        Plot feature importance based on WOE/LeafValue magnitudes.
+        Plot feature importance based on WOE/XAddEvidence magnitudes.
 
         Args:
             figsize: Tuple for figure size
@@ -473,7 +473,7 @@ class CatBoostWOEMapper:
         factor = pdo / np.log(2)
         offset = target_points - factor * np.log(base_odds)
 
-        # Calculate raw scores from WOE or LeafValue
+        # Calculate raw scores from WOE or XAddEvidence
         n_trees = len(scorecard["Tree"].unique())
 
         # Directly use the value column for raw score calculation
@@ -501,7 +501,7 @@ class CatBoostWOEMapper:
         Args:
             features: DataFrame or dictionary of feature values
             method: Scoring method to use:
-                - 'raw': Use original LeafValue
+                - 'raw': Use original XAddEvidence
                 - 'woe': Use Weight of Evidence values
                 - 'pdo': Use points-based scoring
 
@@ -523,7 +523,7 @@ class CatBoostWOEMapper:
 
         try:
             if method == "raw":
-                self.value_column = "LeafValue"
+                self.value_column = "XAddEvidence"
                 self.use_woe = False
             elif method == "woe":
                 self.value_column = "WOE"

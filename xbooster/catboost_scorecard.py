@@ -225,7 +225,7 @@ class CatBoostScorecard:
                     {
                         "Tree": tree_idx,
                         "LeafIndex": leaf_idx,
-                        "LeafValue": clean_val,
+                        "XAddEvidence": clean_val,
                         "Conditions": conditions,
                         "Feature": feature,
                         "Sign": sign,
@@ -304,9 +304,6 @@ class CatBoostScorecard:
             .round(4)
         )
 
-        # Calculate xAddEvidence
-        scorecard_df["xAddEvidence"] = scorecard_df["LeafValue"]
-
         # Calculate CountPct
         total_count = scorecard_df["Count"].sum()
         scorecard_df["CountPct"] = (scorecard_df["Count"] / total_count * 100).fillna(0.0)
@@ -329,10 +326,9 @@ class CatBoostScorecard:
                 "NonEvents",
                 "Events",
                 "EventRate",
-                "LeafValue",
+                "XAddEvidence",
                 "WOE",
                 "IV",
-                "xAddEvidence",
                 "DetailedSplit",
             ]
         ]

@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.2.7] - 2025-12-04
+
+### Changed
+- **CatBoost Naming Standardization**: Replaced `LeafValue` with `XAddEvidence` throughout CatBoost implementation
+  - Standardized naming to match XGBoost and LightGBM implementations
+  - Updated all CatBoost-related files: `catboost_scorecard.py`, `catboost_wrapper.py`, `cb_constructor.py`
+  - Updated all tests and documentation
+
+### Fixed
+- **README Documentation**: Corrected CatBoost depth requirement statement
+  - Changed from "Only supports depth=1" to "depth=1 is recommended for better interpretability"
+  - Code actually supports any tree depth (as long as trees are complete binary)
+  - Updated code examples to use `XAddEvidence` instead of `LeafValue`
+
+### Added
+- **PyPI Publish Workflow**: Added automated PyPI publishing workflow (`.github/workflows/publish.yml`)
+  - Supports both release events and manual workflow dispatch
+  - Uses trusted publishing (OpenID Connect) for secure PyPI uploads
+  - Automatically uploads distribution files to GitHub releases
+
+### Technical Details
+- All 106 tests passing
+- Version updated from 0.2.7rc2 to 0.2.7 (stable release)
+- LightGBM support is now stable (previously release candidate)
+
 ## [0.2.7rc2] - 2025-11-23 (Release Candidate)
 
 ### Fixed

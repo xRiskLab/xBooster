@@ -218,7 +218,7 @@ The `DataPreprocessor` provides:
 3. Generation of interaction constraints for XGBoost
 4. Consistent feature naming for scorecard generation
 
-### LightGBM Support 💡 (Release Candidate)
+### LightGBM Usage
 
 xbooster provides support for LightGBM models with scorecard functionality. Here's how to use it:
 
@@ -296,12 +296,11 @@ print(f"Model Gini: {model_gini:.4f}")
 - **Flexible**: `use_base_score` parameter for optional base score normalization
 
 **Important Notes:**
-- **Release Candidate**: This feature is in testing phase - feedback welcome!
 - LightGBM's sklearn API handles base_score differently than XGBoost
 - The `use_base_score=True` parameter (default) ensures proper normalization
 - Only `XAddEvidence` score type is supported (WOE not applicable)
 
-### CatBoost Support 🐱 (Beta)
+### CatBoost Usage
 
 xbooster provides experimental support for CatBoost models with reduced functionality compared to XGBoost. Here's how to use it:
 
@@ -340,9 +339,9 @@ model = CatBoostClassifier(
 model.fit(pool)
 
 # Create and fit the scorecard constructor
-constructor = CatBoostScorecardConstructor(model, pool)  # use_woe=False is the default, using raw LeafValue
+constructor = CatBoostScorecardConstructor(model, pool)  # use_woe=False is the default, using raw XAddEvidence
 
-# Alternatively, to use WOE values instead of raw leaf values:
+# Alternatively, to use WOE values instead of raw XAddEvidence:
 # constructor = CatBoostScorecardConstructor(model, pool, use_woe=True)
 
 # Construct the scorecard
@@ -350,9 +349,9 @@ scorecard = constructor.construct_scorecard()
 print("\nScorecard:")
 print(scorecard.head(3))
 
-# Print raw leaf values
-print("\nRaw Leaf Values:")
-print(scorecard[["Tree", "LeafIndex", "LeafValue", "WOE"]].head(10))
+# Print raw XAddEvidence values
+print("\nRaw XAddEvidence Values:")
+print(scorecard[["Tree", "LeafIndex", "XAddEvidence", "WOE"]].head(10))
 
 # Make predictions using different methods - Do this BEFORE creating points
 # Original CatBoost predictions
@@ -410,7 +409,7 @@ visualizer.plot_tree(tree_idx=0, title="CatBoost Tree Visualization")
 
 The CatBoost implementation has some limitations compared to the XGBoost version:
 
-1. Only supports depth=1 trees for interpretability
+1. **Depth recommendation**: While the code supports any tree depth (as long as trees are complete binary), `depth=1` is recommended for better interpretability. Deeper trees work but may be harder to interpret.
 2. Limited support for categorical features
 3. No SQL query generation
 4. Reduced visualization options
