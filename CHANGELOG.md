@@ -3,21 +3,29 @@
 ## [0.2.8a1] - 2025-12-04 (Alpha)
 
 ### Added
-- **SHAP Integration (Alpha)**: Added SHAP-based scorecard construction for all three libraries
+- **SHAP Integration (Alpha)**: Added SHAP-based scoring for all three libraries
   - **XGBoost**: Native SHAP extraction using `pred_contribs=True`
   - **LightGBM**: Native SHAP extraction using `pred_contrib=True`
   - **CatBoost**: Native SHAP extraction using `get_feature_importance(type='ShapValues')`
-  - SHAP values are aggregated per leaf using weighted average
-  - New `score_type="SHAP"` option in `create_points()` method
-  - SHAP column automatically added to scorecard during `construct_scorecard()`
+  - New `method="shap"` option in `predict_score()` and `predict_scores()` methods
+  - SHAP values computed on-demand (not stored in scorecard binning table)
+  - Feature-level score decomposition via `predict_scores(method="shap")`
   - Particularly useful for models with `max_depth > 1` where interpretability is challenging
   - No external dependencies required (uses native SHAP implementations)
+
+### Changed
+- **SHAP Architecture Refactoring**: Moved all SHAP logic to dedicated `shap_scorecard.py` module
+  - SHAP extraction functions centralized: `extract_shap_values_xgb()`, `extract_shap_values_lgb()`, `extract_shap_values_cb()`
+  - SHAP computation is now optional and only performed when `method="shap"` is used
+  - Removed SHAP column from scorecard binning tables (cleaner scorecard structure)
+  - Simplified API: users don't need to import or call SHAP extraction functions directly
 
 ### Technical Details
 - All three constructors now support SHAP: `XGBScorecardConstructor`, `LGBScorecardConstructor`, `CatBoostScorecardConstructor`
 - SHAP values computed using native library methods (no shap package dependency)
-- SHAP aggregation: simple average per (Tree, Node, Feature) combination
-- Backward compatible: SHAP is opt-in via `score_type="SHAP"` parameter
+- SHAP computation happens on-demand when `predict_score(method="shap")` or `predict_scores(method="shap")` is called
+- Backward compatible: traditional scorecard methods unchanged
+- Cleaner separation of concerns: scorecard construction vs. SHAP computation
 - Alpha release for testing and feedback
 
 ## [0.2.7] - 2025-12-04

@@ -1,6 +1,21 @@
 # xbooster 🚀
 
-A scorecard-format framework for logistic regression tasks with gradient-boosted decision trees (XGBoost, LightGBM, and CatBoost).
+<div align="center">
+  <img src="examples/ims/xbooster.png" alt="xbooster" width="600"/>
+</div>
+
+<div align="center">
+
+[![PyPI version](https://badge.fury.io/py/xbooster.svg)](https://badge.fury.io/py/xbooster)
+[![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![CI](https://github.com/xRiskLab/xBooster/actions/workflows/ci.yml/badge.svg)](https://github.com/xRiskLab/xBooster/actions/workflows/ci.yml)
+[![PyPI downloads](https://img.shields.io/pypi/dm/xbooster.svg)](https://pypi.org/project/xbooster/)
+
+</div>
+
+A scorecard framework for credit scoring tasks with gradient-boosted decision trees (XGBoost, LightGBM, and CatBoost).
 xbooster allows to convert a classification model into a logarithmic (point) scoring system.
 
 In addition, it provides a suite of interpretability tools to understand the model's behavior.
@@ -10,6 +25,7 @@ The interpretability suite includes:
 - Granular boosted tree statistics, including metrics such as Weight of Evidence (WOE) and Information Value (IV) for splits 🌳
 - Tree visualization with customizations 🎨
 - Global and local feature importance 📊
+- SHAP-based scoring for models with `max_depth > 1` 🧩
 
 xbooster also provides a scorecard deployment using SQL 📦.
 
@@ -141,6 +157,55 @@ Finally, we can generate a scorecard in SQL format.
 sql_query = scorecard_constructor.generate_sql_query(table_name='my_table')
 print(sql_query)
 ```
+
+### SHAP-Based Scoring 🎯
+
+xbooster supports SHAP-based scoring for all three libraries (XGBoost, LightGBM, and CatBoost). This is particularly useful for models with `max_depth > 1` where traditional scorecard interpretability is challenging.
+
+**Key Features:**
+- **Native SHAP extraction** - No external `shap` package required
+- **On-demand computation** - SHAP values are computed only when needed
+- **Feature-level decomposition** - Understand individual feature contributions
+- **Consistent API** - Same interface across all three libraries
+
+**Usage:**
+
+```python
+# Predict scores using SHAP method (no binning table needed)
+shap_scores = scorecard_constructor.predict_score(X_test, method="shap")
+
+# Decompose scores by feature using SHAP
+shap_decomposed = scorecard_constructor.predict_scores(X_test, method="shap")
+print(shap_decomposed.head())
+# Output: DataFrame with columns like 'age_score', 'income_score', ..., 'score'
+
+# Compare with traditional scorecard-based scoring
+traditional_scores = scorecard_constructor.predict_score(X_test)  # Default method
+```
+
+**How it works:**
+- SHAP values are computed on-the-fly using native library methods:
+  - XGBoost: `pred_contribs=True`
+  - LightGBM: `pred_contrib=True`
+  - CatBoost: `get_feature_importance(type='ShapValues')`
+- Values are automatically scaled using PDO (Points to Double the Odds) formula
+- No need to call `create_points()` first - SHAP scoring works independently
+- SHAP values are **not** stored in the scorecard binning table (computed only when needed)
+
+**Example with all three libraries:**
+
+```python
+# XGBoost
+xgb_scores_shap = xgb_constructor.predict_score(X_test, method="shap")
+
+# LightGBM
+lgb_scores_shap = lgb_constructor.predict_score(X_test, method="shap")
+
+# CatBoost
+cb_scores_shap = cb_constructor.predict_score(X_test, method="shap")
+```
+
+For detailed examples, see the [SHAP Scorecard Examples notebook](examples/shap-scorecard-examples.ipynb).
 
 ### Interval Scorecards 📊
 
@@ -339,11 +404,7 @@ model = CatBoostClassifier(
 model.fit(pool)
 
 # Create and fit the scorecard constructor
-constructor = CatBoostScorecardConstructor(model, pool)  # use_woe=False is the default, using raw XAddEvidence
-
-# Alternatively, to use WOE values instead of raw XAddEvidence:
-# constructor = CatBoostScorecardConstructor(model, pool, use_woe=True)
-
+constructor = CatBoostScorecardConstructor(model, pool)
 # Construct the scorecard
 scorecard = constructor.construct_scorecard()
 print("\nScorecard:")
@@ -455,152 +516,6 @@ plot_config = {
 visualizer = CatBoostTreeVisualizer(scorecard, plot_config)
 visualizer.plot_tree(tree_idx=0, title="Customized Tree Visualization")
 ```
-
-## Parameters 🛠
-
-### `xbooster.constructor` - XGBoost Scorecard Constructor
-
-### Description
-
-A class for generating a scorecard from a trained XGBoost model. The methodology is inspired by the NVIDIA GTC Talk "Machine Learning in Retail Credit Risk" by Paul Edwards.
-
-### Methods
-
-1. `extract_leaf_weights() -> pd.DataFrame`:
-   - Extracts the leaf weights from the booster's trees and returns a DataFrame.
-   - **Returns**:
-     - `pd.DataFrame`: DataFrame containing the extracted leaf weights.
-
-2. `extract_decision_nodes() -> pd.DataFrame`:
-   - Extracts the split (decision) nodes from the booster's trees and returns a DataFrame.
-   - **Returns**:
-     - `pd.DataFrame`: DataFrame containing the extracted split (decision) nodes.
-
-3. `construct_scorecard() -> pd.DataFrame`:
-   - Constructs a scorecard based on a booster.
-   - **Returns**:
-     - `pd.DataFrame`: The constructed scorecard.
-
-4. `create_points(pdo=50, target_points=600, target_odds=19, precision_points=0, score_type='XAddEvidence') -> pd.DataFrame`:
-   - Creates a points card from a scorecard.
-   - **Parameters**:
-     - `pdo` (int, optional): The points to double the odds. Default is 50.
-     - `target_points` (int, optional): The standard scorecard points. Default is 600.
-     - `target_odds` (int, optional): The standard scorecard odds. Default is 19.
-     - `precision_points` (int, optional): The points decimal precision. Default is 0.
-     - `score_type` (str, optional): The log-odds to use for the points card. Default is 'XAddEvidence'.
-   - **Returns**:
-     - `pd.DataFrame`: The points card.
-
-5. `predict_score(X: pd.DataFrame) -> pd.Series`:
-   - Predicts the score for a given dataset using the constructed scorecard.
-   - **Parameters**:
-     - `X` (`pd.DataFrame`): Features of the dataset.
-   - **Returns**:
-     - `pd.Series`: Predicted scores.
-
-6. `sql_query` (property):
-   - Property that returns the SQL query for deploying the scorecard.
-   - **Returns**:
-     - `str`: The SQL query for deploying the scorecard.
-
-7. `generate_sql_query(table_name: str = "my_table") -> str`:
-   - Converts a scorecard into an SQL format.
-   - **Parameters**:
-     - `table_name` (str): The name of the input table in SQL.
-   - **Returns**:
-     - `str`: The final SQL query for deploying the scorecard.
-
-8. `construct_scorecard_by_intervals(add_stats=True) -> pd.DataFrame`:
-   - Constructs a scorecard grouped by intervals of the type [a, b). Requires max_depth=1 models.
-   - **Parameters**:
-     - `add_stats` (bool, optional): Whether to include WOE, IV, and count statistics. Default is True.
-   - **Returns**:
-     - `pd.DataFrame`: The interval-based scorecard.
-
-9. `create_points_peo_pdo(peo: int, pdo: int, precision_points: int = 0, scorecard: pd.DataFrame = None) -> pd.DataFrame`:
-   - Creates Points at Even Odds/Points to Double the Odds (PEO/PDO) on interval scorecards.
-   - **Parameters**:
-     - `peo` (int): Points at Even Odds.
-     - `pdo` (int): Points to Double the Odds.
-     - `precision_points` (int, optional): Decimal precision for points. Default is 0.
-     - `scorecard` (pd.DataFrame, optional): Specific scorecard to use. Default uses interval scorecard.
-   - **Returns**:
-     - `pd.DataFrame`: Scorecard with PEO/PDO points.
-
-### `xbooster.explainer` - XGBoost Scorecard Explainer
-
-This module provides functionalities for explaining XGBoost scorecards, including methods to extract split information, build interaction splits, visualize tree structures, plot feature importances, and more.
-
-### Methods:
-
-1. `extract_splits_info(features: str) -> list`:
-   - Extracts split information from the DetailedSplit feature.
-   - **Inputs**:
-     - `features` (str): A string containing split information.
-   - **Outputs**:
-     - Returns a list of tuples containing split information (feature, sign, value).
-
-2. `build_interactions_splits(scorecard_constructor: Optional[XGBScorecardConstructor] = None, dataframe: Optional[pd.DataFrame] = None) -> pd.DataFrame`:
-   - Builds interaction splits from the XGBoost scorecard.
-   - **Inputs**:
-     - `scorecard_constructor` (Optional[XGBScorecardConstructor]): The XGBoost scorecard constructor.
-     - `dataframe` (Optional[pd.DataFrame]): The dataframe containing split information.
-   - **Outputs**:
-     - Returns a pandas DataFrame containing interaction splits.
-
-3. `split_and_count(scorecard_constructor: Optional[XGBScorecardConstructor] = None, dataframe: Optional[pd.DataFrame] = None, label_column: Optional[str] = None) -> pd.DataFrame`:
-   - Splits the dataset and counts events for each split.
-   - **Inputs**:
-     - `scorecard_constructor` (Optional[XGBScorecardConstructor]): The XGBoost scorecard constructor.
-     - `dataframe` (Optional[pd.DataFrame]): The dataframe containing features and labels.
-     - `label_column` (Optional[str]): The label column in the dataframe.
-   - **Outputs**:
-     - Returns a pandas DataFrame containing split information and event counts.
-
-4. `plot_importance(scorecard_constructor: Optional[XGBScorecardConstructor] = None, metric: str = "Likelihood", normalize: bool = True, method: Optional[str] = None, dataframe: Optional[pd.DataFrame] = None, **kwargs: Any) -> None`:
-   - Plots the importance of features based on the XGBoost scorecard.
-   - **Inputs**:
-     - `scorecard_constructor` (Optional[XGBScorecardConstructor]): The XGBoost scorecard constructor.
-     - `metric` (str): Metric to plot ("Likelihood" (default), "NegLogLikelihood", "IV", or "Points").
-     - `normalize` (bool): Whether to normalize the importance values (default: True).
-     - `method` (Optional[str]): The method to use for plotting the importance ("global" or "local").
-     - `dataframe` (Optional[pd.DataFrame]): The dataframe containing features and labels.
-     - `fontfamily` (str): The font family to use for the plot (default: "Monospace").
-     - `fontsize` (int): The font size to use for the plot (default: 12).
-     - `dpi` (int): The DPI of the plot (default: 100).
-     - `title` (str): The title of the plot (default: "Feature Importance").
-     - `**kwargs` (Any): Additional Matplotlib parameters.
-
-5. `plot_score_distribution(y_true: pd.Series = None, y_pred: pd.Series = None, n_bins: int = 25, scorecard_constructor: Optional[XGBScorecardConstructor] = None, **kwargs: Any)`:
-   - Plots the distribution of predicted scores based on actual labels.
-   - **Inputs**:
-     - `y_true` (pd.Series): The true labels.
-     - `y_pred` (pd.Series): The predicted labels.
-     - `n_bins` (int): Number of bins for histogram (default: 25).
-     - `scorecard_constructor` (Optional[XGBScorecardConstructor]): The XGBoost scorecard constructor.
-     - `**kwargs` (Any): Additional Matplotlib parameters.
-
-6. `plot_local_importance(scorecard_constructor: Optional[XGBScorecardConstructor] = None, metric: str = "Likelihood", normalize: bool = True, dataframe: Optional[pd.DataFrame] = None, **kwargs: Any) -> None`:
-   - Plots the local importance of features based on the XGBoost scorecard.
-   - **Inputs**:
-     - `scorecard_constructor` (Optional[XGBScorecardConstructor]): The XGBoost scorecard constructor.
-     - `metric` (str): Metric to plot ("Likelihood" (default), "NegLogLikelihood", "IV", or "Points").
-     - `normalize` (bool): Whether to normalize the importance values (default: True).
-     - `dataframe` (Optional[pd.DataFrame]): The dataframe containing features and labels.
-     - `fontfamily` (str): The font family to use for the plot (default: "Arial").
-     - `fontsize` (int): The font size to use for the plot (default: 12).
-     - `boxstyle` (str): The rounding box style to use for the plot (default: "round").
-     - `title` (str): The title of the plot (default: "Local Feature Importance").
-     - `**kwargs` (Any): Additional parameters to pass to the matplotlib function.
-
-7. `plot_tree(tree_index: int, scorecard_constructor: Optional[XGBScorecardConstructor] = None, show_info: bool = True) -> None`:
-   - Plots the tree structure.
-   - **Inputs**:
-     - `tree_index` (int): Index of the tree to plot.
-     - `scorecard_constructor` (Optional[XGBScorecardConstructor]): The XGBoost scorecard constructor.
-     - `show_info` (bool): Whether to show additional information (default: True).
-     - `**kwargs` (Any): Additional Matplotlib parameters.
 
 ## Contributing 🤝
 Contributions are welcome! For bug reports or feature requests, please open an issue.

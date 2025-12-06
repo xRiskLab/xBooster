@@ -11,6 +11,22 @@ from typing import Dict, Optional
 import numpy as np
 import pandas as pd
 
+try:
+    import xgboost as xgb
+except ImportError:
+    xgb = None
+
+try:
+    from lightgbm import LGBMClassifier
+except ImportError:
+    LGBMClassifier = None
+
+try:
+    from catboost import CatBoostClassifier, Pool
+except ImportError:
+    CatBoostClassifier = None
+    Pool = None
+
 
 def compute_shap_scores(
     model=None,
@@ -20,7 +36,6 @@ def compute_shap_scores(
     base_value: Optional[float] = None,
     scorecard_dict: Optional[Dict[str, float]] = None,
     feature_names: Optional[list] = None,
-    negate_shap: bool = True,
 ) -> pd.DataFrame:
     """
     Convert SHAP values into a scorecard-like system.
@@ -91,17 +106,12 @@ def compute_shap_scores(
     # Scale the intercept by factor (as per user requirement)
     intercept_scaled = factor * intercept_
 
-    # Compute feature-level scores: factor * -shap_value (or factor * shap_value if negate_shap=False)
-    # Note: We typically use -shap_value because higher SHAP (more positive) should reduce score
-    # However, CatBoost's SHAP values may have different sign convention
-    # The intercept is subtracted once from the total (not per feature)
-    # Formula: prediction = sum(SHAP) + base_value (in log-odds)
-    # Score = -factor * prediction + offset = -factor * (sum(SHAP) + base_value) + offset
-    # = -factor * sum(SHAP) - factor * base_value + offset
+    # Compute feature-level scores: factor * -shap_value
+    # Note: We negate SHAP values because higher SHAP (more positive) should reduce score
+    # All libraries (XGBoost, LightGBM, CatBoost) use the same sign convention
     scorecard_df = pd.DataFrame()
-    shap_multiplier = -1 if negate_shap else 1
     for feature in shap_df.columns:
-        scorecard_df[f"{feature}_score"] = factor * (shap_multiplier * shap_df[feature])
+        scorecard_df[f"{feature}_score"] = factor * (-shap_df[feature])
 
     # Compute final score by summing feature-level scores, subtracting scaled intercept once, and adding offset
     # Formula: factor * sum(-shap) - factor * intercept + offset
@@ -116,7 +126,6 @@ def compute_shap_scores_decomposed(
     base_value: float,
     feature_names: list,
     scorecard_dict: Optional[Dict[str, float]] = None,
-    n_trees: Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Convert SHAP values into decomposed scores (by feature and optionally by tree).
@@ -131,7 +140,6 @@ def compute_shap_scores_decomposed(
     base_value: Base log-odds score (expected value)
     feature_names: List of feature names
     scorecard_dict: Config for score scaling (PDO, target points, target odds)
-    n_trees: Number of trees (optional, for tree-level decomposition if available)
 
     Returns:
     --------
@@ -165,3 +173,74 @@ def compute_shap_scores_decomposed(
     scorecard_df["score"] = scorecard_df.sum(axis=1) + offset
 
     return scorecard_df.round(0)
+
+
+def extract_shap_values_xgb(
+    model: "xgb.XGBClassifier",
+    X: pd.DataFrame,  # pylint: disable=C0103
+    base_score: float,
+    enable_categorical: bool = False,
+) -> np.ndarray:
+    """
+    Extract SHAP values from XGBoost model using native pred_contribs.
+
+    Args:
+        model: Trained XGBoost classifier
+        X: Input features DataFrame
+        base_score: Base score from the model
+        enable_categorical: Whether categorical features are enabled
+
+    Returns:
+        Array of shape (n_samples, n_features + 1) where last column is base_score.
+        Feature SHAP values are in columns [:, :-1], base_score is in column [:, -1].
+    """
+    if xgb is None:
+        raise ImportError("xgboost is required for XGBoost SHAP extraction")
+    booster = model.get_booster()
+    scores = np.full((X.shape[0],), base_score)
+    if enable_categorical:
+        dmatrix = xgb.DMatrix(X, base_margin=scores, enable_categorical=True)
+    else:
+        dmatrix = xgb.DMatrix(X, base_margin=scores)
+    return booster.predict(dmatrix, pred_contribs=True)
+
+
+def extract_shap_values_lgb(
+    model: "LGBMClassifier",
+    X: pd.DataFrame,  # pylint: disable=C0103
+) -> np.ndarray:
+    """
+    Extract SHAP values from LightGBM model using native pred_contrib.
+
+    Args:
+        model: Trained LightGBM classifier
+        X: Input features DataFrame
+
+    Returns:
+        Array of shape (n_samples, n_features + 1) where last column is base_score.
+        Feature SHAP values are in columns [:, :-1], base_score is in column [:, -1].
+    """
+    if LGBMClassifier is None:
+        raise ImportError("lightgbm is required for LightGBM SHAP extraction")
+    return model.predict(X, pred_contrib=True)
+
+
+def extract_shap_values_cb(
+    model: "CatBoostClassifier",
+    pool: "Pool",
+) -> np.ndarray:
+    """
+    Extract SHAP values from CatBoost model using native get_feature_importance.
+
+    Args:
+        model: Trained CatBoost classifier
+        pool: CatBoost Pool object
+
+    Returns:
+        Array of shape (n_samples, n_features + 1) where last column is base_score.
+        Feature SHAP values are in columns [:, :-1], base_score is in column [:, -1].
+        CatBoost SHAP format: [feature1, feature2, ..., featureN, expected_value]
+    """
+    if CatBoostClassifier is None or Pool is None:
+        raise ImportError("catboost is required for CatBoost SHAP extraction")
+    return model.get_feature_importance(type="ShapValues", data=pool)

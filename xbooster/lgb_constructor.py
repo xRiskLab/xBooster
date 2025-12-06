@@ -40,7 +40,7 @@ import pandas as pd
 from lightgbm import LGBMClassifier
 
 from ._utils import calculate_information_value, calculate_weight_of_evidence
-from .shap_scorecard import compute_shap_scores
+from .shap_scorecard import compute_shap_scores, extract_shap_values_lgb
 
 # Note: These will be needed when implementing the methods:
 # from typing import Optional
@@ -202,20 +202,6 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
 
         return df_leafs
 
-    def extract_shap_values(self, X: pd.DataFrame) -> np.ndarray:  # pylint: disable=C0103
-        """
-        Extract SHAP values from LightGBM model using native pred_contrib.
-
-        Args:
-            X: Input features DataFrame
-
-        Returns:
-            Array of shape (n_samples, n_features + 1) where last column is base_score.
-            Feature SHAP values are in columns [:, :-1], base_score is in column [:, -1].
-        """
-        shap_values = self.model.predict(X, pred_contrib=True)
-        return shap_values
-
     def extract_leaf_weights(self) -> pd.DataFrame:
         """
         Extract leaf weights from the LightGBM model.
@@ -289,50 +275,6 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
 
         return leaf_weights_df
 
-    def _add_shap_column(self, tree_leaf_idx: np.ndarray) -> None:
-        """
-        Add SHAP column to scorecard by aggregating SHAP values per leaf.
-
-        Args:
-            tree_leaf_idx: Array of shape (n_samples, n_trees) with leaf indices
-        """
-        # Extract SHAP values for all training samples
-        shap_values = self.extract_shap_values(self.X)  # Shape: (n_samples, n_features + 1)
-        shap_features = shap_values[:, :-1]  # Exclude base_score column
-
-        # Create feature name to index mapping
-        feature_to_idx = {name: idx for idx, name in enumerate(self.X.columns)}
-
-        # Initialize SHAP column
-        self.lgb_scorecard["SHAP"] = 0.0
-
-        # For each row in scorecard, aggregate SHAP values
-        for idx, row in self.lgb_scorecard.iterrows():
-            tree_idx = int(row["Tree"])
-            node_idx = int(row["Node"])
-            feature_name = row["Feature"]
-
-            # Skip if feature is not in training data (shouldn't happen, but safety check)
-            if feature_name not in feature_to_idx:
-                continue
-
-            feature_idx = feature_to_idx[feature_name]
-
-            # Find samples that land in this leaf
-            samples_in_leaf = tree_leaf_idx[:, tree_idx] == node_idx
-
-            if not samples_in_leaf.any():
-                continue
-
-            # Get SHAP values for this feature for samples in this leaf
-            shap_for_feature = shap_features[samples_in_leaf, feature_idx]
-
-            if len(shap_for_feature) > 0:
-                # Use simple average (all samples in leaf have equal weight)
-                self.lgb_scorecard.loc[idx, "SHAP"] = float(np.mean(shap_for_feature))
-            else:
-                self.lgb_scorecard.loc[idx, "SHAP"] = 0.0
-
     def construct_scorecard(self) -> pd.DataFrame:
         """
         Construct a scorecard by combining leaf weights with event statistics.
@@ -405,9 +347,6 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             drop=True
         )
 
-        # Add SHAP values column
-        self._add_shap_column(tree_leaf_idx)
-
         # Get WOE and IV scores
         self.lgb_scorecard["WOE"] = calculate_weight_of_evidence(self.lgb_scorecard)["WOE"]
         self.lgb_scorecard["IV"] = calculate_information_value(self.lgb_scorecard)["IV"]
@@ -432,7 +371,6 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
                 "WOE",
                 "IV",
                 "XAddEvidence",
-                "SHAP",
             ]
         ]
         return self.lgb_scorecard
@@ -611,6 +549,10 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         - For 'shap': Computes SHAP values on-the-fly, scales directly without binning
         """
         if method == "shap":
+            # Use stored PDO parameters if available (from create_points), otherwise use provided/defaults
+            pdo = self.pdo if self.pdo is not None else pdo
+            target_points = self.target_points if self.target_points is not None else target_points
+            target_odds = self.target_odds if self.target_odds is not None else target_odds
             return self._predict_score_shap(X, pdo, target_points, target_odds)
 
         # Default: use traditional scorecard-based approach (points lookup)
@@ -640,7 +582,9 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             Series of predicted scores
         """
         # Extract SHAP values for input features
-        shap_values_full = self.extract_shap_values(X)  # Shape: (n_samples, n_features + 1)
+        shap_values_full = extract_shap_values_lgb(
+            self.model, X
+        )  # Shape: (n_samples, n_features + 1)
         shap_values = shap_values_full[:, :-1]  # Feature contributions
         base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
 
@@ -686,6 +630,10 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             DataFrame with decomposed scores (tree-level for default, feature-level for SHAP)
         """
         if method == "shap":
+            # Use stored PDO parameters if available (from create_points), otherwise use provided/defaults
+            pdo = self.pdo if self.pdo is not None else pdo
+            target_points = self.target_points if self.target_points is not None else target_points
+            target_odds = self.target_odds if self.target_odds is not None else target_odds
             return self._predict_scores_shap(X, pdo, target_points, target_odds)
 
         # Default: use traditional scorecard-based approach (tree-level decomposition)
@@ -711,7 +659,9 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             DataFrame with feature-level score contributions and total score
         """
         # Extract SHAP values for input features
-        shap_values_full = self.extract_shap_values(X)  # Shape: (n_samples, n_features + 1)
+        shap_values_full = extract_shap_values_lgb(
+            self.model, X
+        )  # Shape: (n_samples, n_features + 1)
         shap_values = shap_values_full[:, :-1]  # Feature contributions
         base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
 

@@ -40,7 +40,7 @@ from scipy.special import logit
 
 from ._parser import TreeParser
 from ._utils import calculate_information_value, calculate_weight_of_evidence
-from .shap_scorecard import compute_shap_scores
+from .shap_scorecard import compute_shap_scores, extract_shap_values_xgb
 
 
 class XGBScorecardConstructor:
@@ -214,25 +214,6 @@ class XGBScorecardConstructor:
             df_leafs[f"tree_{i}"] = tree_leafs.flatten()
         return df_leafs
 
-    def extract_shap_values(self, X: pd.DataFrame) -> np.ndarray:  # pylint: disable=C0103
-        """
-        Extract SHAP values from XGBoost model using native pred_contribs.
-
-        Args:
-            X: Input features DataFrame
-
-        Returns:
-            Array of shape (n_samples, n_features + 1) where last column is base_score.
-            Feature SHAP values are in columns [:, :-1], base_score is in column [:, -1].
-        """
-        scores = np.full((X.shape[0],), self.base_score)
-        if self.enable_categorical:
-            dmatrix = xgb.DMatrix(X, base_margin=scores, enable_categorical=True)
-        else:
-            dmatrix = xgb.DMatrix(X, base_margin=scores)
-        shap_values = self.booster_.predict(dmatrix, pred_contribs=True)
-        return shap_values
-
     def extract_leaf_weights(self) -> pd.DataFrame:
         """
         Extracts the leaf weights from the booster's trees and returns a DataFrame.
@@ -295,52 +276,6 @@ class XGBScorecardConstructor:
         )
 
         return leaf_weights_df
-
-    def _add_shap_column(self, tree_leaf_idx: np.ndarray) -> None:
-        """
-        Add SHAP column to scorecard by aggregating SHAP values per leaf.
-
-        Args:
-            tree_leaf_idx: Array of shape (n_samples, n_trees) with leaf indices
-        """
-        # Extract SHAP values for all training samples
-        shap_values = self.extract_shap_values(self.X)  # Shape: (n_samples, n_features + 1)
-        shap_features = shap_values[:, :-1]  # Exclude base_score column
-
-        # Create feature name to index mapping
-        feature_to_idx = {name: idx for idx, name in enumerate(self.X.columns)}
-
-        # Initialize SHAP column
-        self.xgb_scorecard["SHAP"] = 0.0
-
-        # For each row in scorecard, aggregate SHAP values
-        for idx, row in self.xgb_scorecard.iterrows():
-            tree_idx = int(row["Tree"])
-            node_idx = int(row["Node"])
-            feature_name = row["Feature"]
-
-            # Skip if feature is not in training data (shouldn't happen, but safety check)
-            if feature_name not in feature_to_idx:
-                continue
-
-            feature_idx = feature_to_idx[feature_name]
-
-            # Find samples that land in this leaf
-            samples_in_leaf = tree_leaf_idx[:, tree_idx] == node_idx
-
-            if not samples_in_leaf.any():
-                continue
-
-            # Get SHAP values for this feature for samples in this leaf
-            shap_for_feature = shap_features[samples_in_leaf, feature_idx]
-
-            if len(shap_for_feature) > 0:
-                # Use simple average (all samples in leaf have equal weight)
-                # The Count column already represents the number of samples in the leaf,
-                # so we're effectively computing the mean SHAP value per feature per leaf
-                self.xgb_scorecard.loc[idx, "SHAP"] = float(np.mean(shap_for_feature))
-            else:
-                self.xgb_scorecard.loc[idx, "SHAP"] = 0.0
 
     def extract_decision_nodes(self) -> pd.DataFrame:
         """
@@ -464,9 +399,6 @@ class XGBScorecardConstructor:
             drop=True
         )
 
-        # Add SHAP values column
-        self._add_shap_column(tree_leaf_idx)
-
         # Get WOE and IV scores
         self.xgb_scorecard["WOE"] = calculate_weight_of_evidence(self.xgb_scorecard)["WOE"]
         self.xgb_scorecard["IV"] = calculate_information_value(self.xgb_scorecard)["IV"]
@@ -494,7 +426,6 @@ class XGBScorecardConstructor:
                 "WOE",
                 "IV",
                 "XAddEvidence",
-                "SHAP",
                 "DetailedSplit",
             ]
         ]
@@ -579,12 +510,10 @@ class XGBScorecardConstructor:
                 raise ValueError("xgb_scorecard is None and dataframe is None.")
             # Get base score based on score_type
             if score_type == "SHAP":
-                # For SHAP, extract and use the SHAP base value (last column of SHAP values)
-                shap_values_full = self.extract_shap_values(self.X)
-                shap_base_value = float(
-                    np.mean(shap_values_full[:, -1])
-                )  # Mean of base_score column
-                base_score = shap_base_value
+                raise ValueError(
+                    "SHAP score_type is no longer supported in create_points(). "
+                    "Use predict_score(method='shap') instead."
+                )
             elif score_type == "WOE":
                 # For WOE, use average event rate
                 base_score = self.y.mean() / (1 - self.y.mean())
@@ -696,6 +625,10 @@ class XGBScorecardConstructor:
         - pd.Series: Predicted scores.
         """
         if method == "shap":
+            # Use stored PDO parameters if available (from create_points), otherwise use provided/defaults
+            pdo = self.pdo if self.pdo is not None else pdo
+            target_points = self.target_points if self.target_points is not None else target_points
+            target_odds = self.target_odds if self.target_odds is not None else target_odds
             return self._predict_score_shap(X, pdo, target_points, target_odds)
 
         # Default: use traditional scorecard-based approach (points lookup)
@@ -725,7 +658,9 @@ class XGBScorecardConstructor:
             Series of predicted scores
         """
         # Extract SHAP values for input features
-        shap_values_full = self.extract_shap_values(X)  # Shape: (n_samples, n_features + 1)
+        shap_values_full = extract_shap_values_xgb(
+            self.model, X, self.base_score, self.enable_categorical
+        )  # Shape: (n_samples, n_features + 1)
         shap_values = shap_values_full[:, :-1]  # Feature contributions
         base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
 
@@ -771,6 +706,10 @@ class XGBScorecardConstructor:
         - pd.DataFrame: Decomposed scores (tree-level for default, feature-level for SHAP)
         """
         if method == "shap":
+            # Use stored PDO parameters if available (from create_points), otherwise use provided/defaults
+            pdo = self.pdo if self.pdo is not None else pdo
+            target_points = self.target_points if self.target_points is not None else target_points
+            target_odds = self.target_odds if self.target_odds is not None else target_odds
             return self._predict_scores_shap(X, pdo, target_points, target_odds)
 
         # Default: use traditional scorecard-based approach (tree-level decomposition)
@@ -796,7 +735,9 @@ class XGBScorecardConstructor:
             DataFrame with feature-level score contributions and total score
         """
         # Extract SHAP values for input features
-        shap_values_full = self.extract_shap_values(X)  # Shape: (n_samples, n_features + 1)
+        shap_values_full = extract_shap_values_xgb(
+            self.model, X, self.base_score, self.enable_categorical
+        )  # Shape: (n_samples, n_features + 1)
         shap_values = shap_values_full[:, :-1]  # Feature contributions
         base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
 
