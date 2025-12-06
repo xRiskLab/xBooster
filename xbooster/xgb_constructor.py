@@ -40,6 +40,7 @@ from scipy.special import logit
 
 from ._parser import TreeParser
 from ._utils import calculate_information_value, calculate_weight_of_evidence
+from .shap_scorecard import compute_shap_scores
 
 
 class XGBScorecardConstructor:
@@ -568,18 +569,28 @@ class XGBScorecardConstructor:
         if self.score_type is None:
             self.score_type = score_type
 
-        if score_type not in {"XAddEvidence", "WOE", "SHAP"}:
+        if score_type not in {"XAddEvidence", "WOE"}:
             raise ValueError(
-                "constructor.py: score must be one of 'XAddEvidence', 'WOE', or 'SHAP'"
+                "constructor.py: score must be one of 'XAddEvidence' or 'WOE'. "
+                "For SHAP-based scoring, use predict_score(method='shap') instead."
             )
         try:
             if self.xgb_scorecard is None:
                 raise ValueError("xgb_scorecard is None and dataframe is None.")
-            # If we use score_type == 'WOE', we need to calculate the initial
-            # odds, O(H)
-            base_score = (
-                self.y.mean() / (1 - self.y.mean()) if score_type == "WOE" else self.base_score
-            )
+            # Get base score based on score_type
+            if score_type == "SHAP":
+                # For SHAP, extract and use the SHAP base value (last column of SHAP values)
+                shap_values_full = self.extract_shap_values(self.X)
+                shap_base_value = float(
+                    np.mean(shap_values_full[:, -1])
+                )  # Mean of base_score column
+                base_score = shap_base_value
+            elif score_type == "WOE":
+                # For WOE, use average event rate
+                base_score = self.y.mean() / (1 - self.y.mean())
+            else:
+                # For XAddEvidence, use model's base_score
+                base_score = self.base_score
             if score_type == "XAddEvidence":
                 score_col = self.xgb_scorecard.XAddEvidence
             elif score_type == "WOE":
@@ -588,14 +599,6 @@ class XGBScorecardConstructor:
                     # TODO: Make adjustable in the future
                     / self.xgb_scorecard["Node"].max()
                 )
-            elif score_type == "SHAP":
-                # Check if SHAP column exists
-                if "SHAP" not in self.xgb_scorecard.columns:
-                    raise ValueError(
-                        "SHAP column not found in scorecard. "
-                        "Please call construct_scorecard() first to compute SHAP values."
-                    )
-                score_col = self.xgb_scorecard.SHAP
             else:
                 raise ValueError(f"Unknown score_type: {score_type}")
 
@@ -608,11 +611,10 @@ class XGBScorecardConstructor:
         factor = pdo / np.log(2)
         offset = target_points - factor * np.log(target_odds)
 
-        scdf["ScaledScore"] = factor * scdf.Score + logit(scdf.base_score)
-
+        # Scale scores with base_score adjustment
         if score_type == "XAddEvidence":
             scdf["ScaledScore"] = factor * scdf.Score + logit(scdf.base_score)
-        else:
+        else:  # WOE
             scdf["ScaledScore"] = factor * scdf.Score
 
         # Set the index to the Tree number
@@ -670,30 +672,151 @@ class XGBScorecardConstructor:
         result = pd.concat([result, result.sum(axis=1).rename("Score")], axis=1)
         return result
 
-    def predict_score(self, X: pd.DataFrame) -> pd.Series:  # pylint: disable=C0103
+    def predict_score(
+        self,
+        X: pd.DataFrame,  # pylint: disable=C0103
+        method: Optional[str] = None,
+        pdo: int = 50,
+        target_points: int = 600,
+        target_odds: int = 19,
+    ) -> pd.Series:
         """
         Predicts the score for a given dataset using the constructed scorecard.
 
         Parameters:
-        - X (pd.DataFrame): Features of the dataset.
+        - X: Features of the dataset.
+        - method: Scoring method to use:
+            - None (default): Use traditional scorecard-based approach (points lookup)
+            - 'shap': Use SHAP values directly (computes SHAP on-the-fly, no binning table)
+        - pdo: Points to Double the Odds (only used for method='shap')
+        - target_points: Target score for reference odds (only used for method='shap')
+        - target_odds: Reference odds ratio (only used for method='shap')
 
         Returns:
         - pd.Series: Predicted scores.
         """
+        if method == "shap":
+            return self._predict_score_shap(X, pdo, target_points, target_odds)
+
+        # Default: use traditional scorecard-based approach (points lookup)
+        # Auto-create points if not already created (for backward compatibility)
+        if self.xgb_scorecard_with_points is None:
+            self.create_points(pdo=pdo, target_points=target_points, target_odds=target_odds)
         points_df = self._convert_tree_to_points(X)
         return pd.Series(points_df["Score"], name="Score")
 
-    def predict_scores(self, X: pd.DataFrame) -> pd.DataFrame:  # pylint: disable=C0103
+    def _predict_score_shap(
+        self,
+        X: pd.DataFrame,  # pylint: disable=C0103
+        pdo: int = 50,
+        target_points: int = 600,
+        target_odds: int = 19,
+    ) -> pd.Series:
         """
-        Predicts the score for a given dataset using the constructed scorecard.
+        Predict scores using SHAP values directly (no binning table).
 
-        Parameters:
-        - X (pd.DataFrame): Features of the dataset.
+        Args:
+            X: Input features DataFrame
+            pdo: Points to Double the Odds
+            target_points: Target score for reference odds
+            target_odds: Reference odds ratio
 
         Returns:
-        - pd.Series: Predicted scores.
+            Series of predicted scores
         """
+        # Extract SHAP values for input features
+        shap_values_full = self.extract_shap_values(X)  # Shape: (n_samples, n_features + 1)
+        shap_values = shap_values_full[:, :-1]  # Feature contributions
+        base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
+
+        # Use the SHAP scorecard computation function
+        scorecard_dict = {
+            "pdo": pdo,
+            "target_points": target_points,
+            "target_odds": target_odds,
+        }
+
+        # Compute SHAP-based scores using the dedicated function
+        scorecard_df = compute_shap_scores(
+            shap_values=shap_values,
+            base_value=base_value,
+            feature_names=X.columns.tolist(),
+            scorecard_dict=scorecard_dict,
+        )
+
+        # Extract final scores
+        return scorecard_df["score"]
+
+    def predict_scores(
+        self,
+        X: pd.DataFrame,  # pylint: disable=C0103
+        method: Optional[str] = None,
+        pdo: int = 50,
+        target_points: int = 600,
+        target_odds: int = 19,
+    ) -> pd.DataFrame:
+        """
+        Predicts decomposed scores for a given dataset.
+
+        Parameters:
+        - X: Features of the dataset.
+        - method: Scoring method to use:
+            - None (default): Use traditional scorecard-based approach (tree-level decomposition)
+            - 'shap': Use SHAP values directly (feature-level decomposition)
+        - pdo: Points to Double the Odds (only used for method='shap')
+        - target_points: Target score for reference odds (only used for method='shap')
+        - target_odds: Reference odds ratio (only used for method='shap')
+
+        Returns:
+        - pd.DataFrame: Decomposed scores (tree-level for default, feature-level for SHAP)
+        """
+        if method == "shap":
+            return self._predict_scores_shap(X, pdo, target_points, target_odds)
+
+        # Default: use traditional scorecard-based approach (tree-level decomposition)
         return self._convert_tree_to_points(X)
+
+    def _predict_scores_shap(
+        self,
+        X: pd.DataFrame,  # pylint: disable=C0103
+        pdo: int = 50,
+        target_points: int = 600,
+        target_odds: int = 19,
+    ) -> pd.DataFrame:
+        """
+        Predict decomposed scores using SHAP values (feature-level decomposition).
+
+        Args:
+            X: Input features DataFrame
+            pdo: Points to Double the Odds
+            target_points: Target score for reference odds
+            target_odds: Reference odds ratio
+
+        Returns:
+            DataFrame with feature-level score contributions and total score
+        """
+        # Extract SHAP values for input features
+        shap_values_full = self.extract_shap_values(X)  # Shape: (n_samples, n_features + 1)
+        shap_values = shap_values_full[:, :-1]  # Feature contributions
+        base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
+
+        # Use the SHAP scorecard computation function
+        scorecard_dict = {
+            "pdo": pdo,
+            "target_points": target_points,
+            "target_odds": target_odds,
+        }
+
+        # Compute SHAP-based scores with feature-level decomposition
+        scorecard_df = compute_shap_scores(
+            shap_values=shap_values,
+            base_value=base_value,
+            feature_names=X.columns.tolist(),
+            scorecard_dict=scorecard_dict,
+        )
+
+        # Return DataFrame with feature scores and total score
+        return scorecard_df
 
     @property
     def sql_query(self):

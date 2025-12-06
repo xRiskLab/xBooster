@@ -33,11 +33,14 @@ Example usage (to be implemented):
     print(f"Test Gini score: {gini:.2%}")
 """
 
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 from lightgbm import LGBMClassifier
 
 from ._utils import calculate_information_value, calculate_weight_of_evidence
+from .shap_scorecard import compute_shap_scores
 
 # Note: These will be needed when implementing the methods:
 # from typing import Optional
@@ -451,7 +454,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             target_points: Points at target odds
             target_odds: Target odds ratio
             precision_points: Decimal precision for points
-            score_type: Must be 'XAddEvidence' or 'SHAP' (only supported types for LightGBM)
+            score_type: Must be 'XAddEvidence' (only supported type for LightGBM)
             use_base_score: If True, normalize Tree 0 by subtracting base_score and add
                 logit(base_score) during scaling. This ensures all trees contribute
                 proportionally. Default: True (recommended).
@@ -475,10 +478,10 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         self.precision_points = precision_points
         self.score_type = score_type
 
-        if score_type not in {"XAddEvidence", "SHAP"}:
+        if score_type != "XAddEvidence":
             raise ValueError(
-                "Only 'XAddEvidence' and 'SHAP' score_type are supported for LightGBM. "
-                "WOE-based scoring is not recommended due to base_score normalization issues."
+                "Only 'XAddEvidence' score_type is supported for LightGBM. "
+                "For SHAP-based scoring, use predict_score(method='shap') instead."
             )
 
         if self.lgb_scorecard is None:
@@ -492,15 +495,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         scdf = self.lgb_scorecard.copy()
 
         # Select score column based on score_type
-        if score_type == "SHAP":
-            # Check if SHAP column exists
-            if "SHAP" not in scdf.columns:
-                raise ValueError(
-                    "SHAP column not found in scorecard. "
-                    "Please call construct_scorecard() first to compute SHAP values."
-                )
-            scdf["Score"] = scdf["SHAP"]
-        elif use_base_score:
+        if use_base_score:
             # IMPORTANT: LightGBM sklearn API includes base_score in the first tree's leaves.
             # We need to subtract base_score from Tree 0 to normalize all trees to the same scale.
             # This ensures each tree gets proportional weight in the scorecard (like XGBoost).
@@ -588,35 +583,155 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         result = pd.concat([result, result.sum(axis=1).rename("Score")], axis=1)
         return result
 
-    def predict_score(self, X: pd.DataFrame) -> pd.Series:  # pylint: disable=C0103
+    def predict_score(
+        self,
+        X: pd.DataFrame,  # pylint: disable=C0103
+        method: Optional[str] = None,
+        pdo: int = 50,
+        target_points: int = 600,
+        target_odds: int = 19,
+    ) -> pd.Series:
         """
         Predict scores for new data using the constructed scorecard.
 
         Args:
             X: Input features
+            method: Scoring method to use:
+                - None (default): Use traditional scorecard-based approach (points lookup)
+                - 'shap': Use SHAP values directly (computes SHAP on-the-fly, no binning table)
+            pdo: Points to Double the Odds (only used for method='shap')
+            target_points: Target score for reference odds (only used for method='shap')
+            target_odds: Reference odds ratio (only used for method='shap')
 
         Returns:
             Series of credit scores
 
         Implementation:
-        - Maps observations to leaf nodes using predict(pred_leaf=True)
-        - Looks up points from scorecard
-        - Sums across trees
+        - Default: Maps observations to leaf nodes, looks up points from scorecard, sums across trees
+        - For 'shap': Computes SHAP values on-the-fly, scales directly without binning
         """
+        if method == "shap":
+            return self._predict_score_shap(X, pdo, target_points, target_odds)
+
+        # Default: use traditional scorecard-based approach (points lookup)
+        # Auto-create points if not already created (for backward compatibility)
+        if self.lgb_scorecard_with_points is None:
+            self.create_points(pdo=pdo, target_points=target_points, target_odds=target_odds)
         points_df = self._convert_tree_to_points(X)
         return pd.Series(points_df["Score"], name="Score")
 
-    def predict_scores(self, X: pd.DataFrame) -> pd.DataFrame:  # pylint: disable=C0103
+    def _predict_score_shap(
+        self,
+        X: pd.DataFrame,  # pylint: disable=C0103
+        pdo: int = 50,
+        target_points: int = 600,
+        target_odds: int = 19,
+    ) -> pd.Series:
         """
-        Predict detailed scores showing contribution from each tree.
+        Predict scores using SHAP values directly (no binning table).
+
+        Args:
+            X: Input features DataFrame
+            pdo: Points to Double the Odds
+            target_points: Target score for reference odds
+            target_odds: Reference odds ratio
+
+        Returns:
+            Series of predicted scores
+        """
+        # Extract SHAP values for input features
+        shap_values_full = self.extract_shap_values(X)  # Shape: (n_samples, n_features + 1)
+        shap_values = shap_values_full[:, :-1]  # Feature contributions
+        base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
+
+        # Use the SHAP scorecard computation function
+        scorecard_dict = {
+            "pdo": pdo,
+            "target_points": target_points,
+            "target_odds": target_odds,
+        }
+
+        # Compute SHAP-based scores using the dedicated function
+        scorecard_df = compute_shap_scores(
+            shap_values=shap_values,
+            base_value=base_value,
+            feature_names=X.columns.tolist(),
+            scorecard_dict=scorecard_dict,
+        )
+
+        # Extract final scores
+        return scorecard_df["score"]
+
+    def predict_scores(
+        self,
+        X: pd.DataFrame,  # pylint: disable=C0103
+        method: Optional[str] = None,
+        pdo: int = 50,
+        target_points: int = 600,
+        target_odds: int = 19,
+    ) -> pd.DataFrame:
+        """
+        Predict decomposed scores for a given dataset.
 
         Args:
             X: Input features
+            method: Scoring method to use:
+                - None (default): Use traditional scorecard-based approach (tree-level decomposition)
+                - 'shap': Use SHAP values directly (feature-level decomposition)
+            pdo: Points to Double the Odds (only used for method='shap')
+            target_points: Target score for reference odds (only used for method='shap')
+            target_odds: Reference odds ratio (only used for method='shap')
 
         Returns:
-            DataFrame with tree-level score breakdowns
+            DataFrame with decomposed scores (tree-level for default, feature-level for SHAP)
         """
+        if method == "shap":
+            return self._predict_scores_shap(X, pdo, target_points, target_odds)
+
+        # Default: use traditional scorecard-based approach (tree-level decomposition)
         return self._convert_tree_to_points(X)
+
+    def _predict_scores_shap(
+        self,
+        X: pd.DataFrame,  # pylint: disable=C0103
+        pdo: int = 50,
+        target_points: int = 600,
+        target_odds: int = 19,
+    ) -> pd.DataFrame:
+        """
+        Predict decomposed scores using SHAP values (feature-level decomposition).
+
+        Args:
+            X: Input features DataFrame
+            pdo: Points to Double the Odds
+            target_points: Target score for reference odds
+            target_odds: Reference odds ratio
+
+        Returns:
+            DataFrame with feature-level score contributions and total score
+        """
+        # Extract SHAP values for input features
+        shap_values_full = self.extract_shap_values(X)  # Shape: (n_samples, n_features + 1)
+        shap_values = shap_values_full[:, :-1]  # Feature contributions
+        base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
+
+        # Use the SHAP scorecard computation function
+        scorecard_dict = {
+            "pdo": pdo,
+            "target_points": target_points,
+            "target_odds": target_odds,
+        }
+
+        # Compute SHAP-based scores with feature-level decomposition
+        scorecard_df = compute_shap_scores(
+            shap_values=shap_values,
+            base_value=base_value,
+            feature_names=X.columns.tolist(),
+            scorecard_dict=scorecard_dict,
+        )
+
+        # Return DataFrame with feature scores and total score
+        return scorecard_df
 
     @property
     def sql_query(self) -> str:

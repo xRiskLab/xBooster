@@ -20,6 +20,7 @@ from catboost import CatBoostClassifier, Pool
 
 from xbooster.catboost_scorecard import CatBoostScorecard
 from xbooster.catboost_wrapper import CatBoostWOEMapper
+from xbooster.shap_scorecard import compute_shap_scores
 
 
 class CatBoostScorecardConstructor:
@@ -117,13 +118,16 @@ class CatBoostScorecardConstructor:
             pool: CatBoost Pool object
 
         Returns:
-            Array of shape (n_samples, n_features) with SHAP values.
-            Note: CatBoost SHAP doesn't include base_score separately.
+            Array of shape (n_samples, n_features + 1) where last column is base_score.
+            Feature SHAP values are in columns [:, :-1], base_score is in column [:, -1].
+            CatBoost SHAP format: [feature1, feature2, ..., featureN, expected_value]
         """
         if self.model is None:
             raise ValueError("Model not set. Call fit() first.")
-        shap_values = self.model.get_feature_importance(type="ShapValues", data=pool)
-        return shap_values
+        shap_values_full = self.model.get_feature_importance(type="ShapValues", data=pool)
+        # CatBoost SHAP format: [feature1, feature2, ..., featureN, expected_value]
+        # Return full array with base value in last column (same format as XGBoost/LightGBM)
+        return shap_values_full
 
     def extract_leaf_weights(self) -> pd.DataFrame:
         """
@@ -147,24 +151,49 @@ class CatBoostScorecardConstructor:
             return
 
         # Extract SHAP values for all training samples
-        shap_values = self.extract_shap_values(self.pool)  # Shape: (n_samples, n_features)
+        shap_values_full = self.extract_shap_values(self.pool)  # Shape: (n_samples, n_features + 1)
+        shap_values = shap_values_full[:, :-1]  # Exclude base_score column
 
         # Get leaf assignments
         leaf_assignments = self.model.calc_leaf_indexes(self.pool)  # Shape: (n_samples, n_trees)
 
-        # Get feature names from pool
+        # Get feature names - try multiple methods
+        feature_names = None
         try:
             feature_names = self.pool.get_feature_names()
         except (AttributeError, TypeError):
-            # Fallback: try to get from pool data
-            feature_names = list(range(shap_values.shape[1]))
+            pass
 
-        # Create feature name to index mapping
-        if isinstance(feature_names, list) and len(feature_names) == shap_values.shape[1]:
-            feature_to_idx = {name: idx for idx, name in enumerate(feature_names)}
-        else:
-            # Fallback: use indices
-            feature_to_idx = {f"Feature_{i}": i for i in range(shap_values.shape[1])}
+        # If that didn't work, try getting from the model
+        if feature_names is None:
+            try:
+                feature_names = self.model.feature_names_
+            except AttributeError:
+                pass
+
+        # If still None, try to infer from pool data
+        if feature_names is None:
+            try:
+                # Get feature names from pool's feature names if available
+                pool_data = self.pool.get_features()
+                if hasattr(pool_data, "columns"):
+                    feature_names = list(pool_data.columns)
+                else:
+                    # Last resort: use indices
+                    feature_names = [f"f{i}" for i in range(shap_values.shape[1])]
+            except Exception:
+                feature_names = [f"f{i}" for i in range(shap_values.shape[1])]
+
+        # Create feature name to index mapping - handle both string and numeric feature names
+        feature_to_idx = {}
+        for idx, name in enumerate(feature_names):
+            # Try both the name as-is and as string
+            name_str = str(name).strip()
+            feature_to_idx[name_str] = idx
+            # Also add without spaces
+            feature_to_idx[name_str.replace(" ", "")] = idx
+            if name != name_str:
+                feature_to_idx[name] = idx
 
         # Initialize SHAP column
         scorecard["SHAP"] = 0.0
@@ -176,10 +205,28 @@ class CatBoostScorecardConstructor:
             feature_name = row.get("Feature")
 
             # Skip if feature is not available
-            if pd.isna(feature_name) or feature_name not in feature_to_idx:
+            if pd.isna(feature_name):
                 continue
 
-            feature_idx = feature_to_idx[feature_name]
+            # Try to match feature name (handle string conversion and whitespace)
+            feature_name_str = str(feature_name).strip()
+            feature_idx = None
+
+            # Try exact match
+            if feature_name_str in feature_to_idx:
+                feature_idx = feature_to_idx[feature_name_str]
+            # Try without spaces
+            elif feature_name_str.replace(" ", "") in feature_to_idx:
+                feature_idx = feature_to_idx[feature_name_str.replace(" ", "")]
+            # Try case-insensitive match
+            else:
+                for key, val in feature_to_idx.items():
+                    if key.lower() == feature_name_str.lower():
+                        feature_idx = val
+                        break
+
+            if feature_idx is None:
+                continue
 
             # Find samples that land in this leaf
             samples_in_leaf = leaf_assignments[:, tree_idx] == leaf_idx
@@ -302,7 +349,12 @@ class CatBoostScorecardConstructor:
         return self.mapper.feature_importance
 
     def predict_score(
-        self, features: Union[pd.DataFrame, Dict[str, Any]], method: str = "raw"
+        self,
+        features: Union[pd.DataFrame, Dict[str, Any]],
+        method: Optional[str] = None,
+        pdo: float = 50,
+        target_points: float = 600,
+        target_odds: float = 19,
     ) -> Union[float, np.ndarray]:
         """
         Predict scores using the specified method.
@@ -310,13 +362,30 @@ class CatBoostScorecardConstructor:
         Args:
             features: DataFrame or dictionary of feature values
             method: Scoring method to use:
-                - 'raw': Use original XAddEvidence
-                - 'woe': Use Weight of Evidence values
-                - 'pdo': Use points-based scoring
+                - None (default): Use traditional points-based scoring (scorecard-based)
+                - 'raw': Use original XAddEvidence (scorecard-based)
+                - 'woe': Use Weight of Evidence values (scorecard-based)
+                - 'shap': Use SHAP values directly (computes SHAP on-the-fly, no binning table)
+            pdo: Points to Double the Odds (only used for method='shap')
+            target_points: Target score for reference odds (only used for method='shap')
+            target_odds: Reference odds ratio (only used for method='shap')
 
         Returns:
             Series containing predicted scores
         """
+        # Convert dict to DataFrame if needed
+        if isinstance(features, dict):
+            features = pd.DataFrame([features])
+
+        # Handle SHAP method separately (no binning table needed)
+        if method == "shap":
+            return self._predict_score_shap(features, pdo, target_points, target_odds)
+
+        # Default to traditional points-based scoring if method is None
+        if method is None:
+            method = "pdo"
+
+        # For other methods, use existing scorecard-based approach
         if self.mapper is None:
             raise ValueError("Mapper not initialized. Call fit() first.")
 
@@ -347,9 +416,69 @@ class CatBoostScorecardConstructor:
             self.mapper.use_woe = False
             scores = self.mapper.predict_score(features)
         else:
-            raise ValueError(f"Unknown method: {method}")
+            raise ValueError(
+                f"Unknown method: {method}. Use None (default), 'raw', 'woe', or 'shap'."
+            )
 
         return pd.Series(scores) if isinstance(scores, (float, np.ndarray)) else scores
+
+    def _predict_score_shap(
+        self,
+        features: pd.DataFrame,
+        pdo: float = 50,
+        target_points: float = 600,
+        target_odds: float = 19,
+    ) -> pd.Series:
+        """
+        Predict scores using SHAP values directly (no binning table).
+
+        This method computes SHAP values on-the-fly for input features and scales them
+        using PDO formula. Different from scorecard-based methods which use pre-computed
+        binned values.
+
+        Args:
+            features: DataFrame of feature values
+            pdo: Points to Double the Odds
+            target_points: Target score for reference odds
+            target_odds: Reference odds ratio
+
+        Returns:
+            Series of predicted scores
+        """
+        if self.model is None:
+            raise ValueError("Model not set. Call fit() first.")
+
+        # Create Pool for CatBoost
+        # For prediction, we don't need labels, but Pool requires them
+        # Create dummy labels (will be ignored for SHAP computation)
+        dummy_labels = np.zeros(len(features))
+        pool = Pool(features, dummy_labels)
+
+        # Extract SHAP values for input features
+        shap_values_full = self.extract_shap_values(pool)  # Shape: (n_samples, n_features + 1)
+        shap_values = shap_values_full[:, :-1]  # Feature contributions
+        base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
+
+        # Use the SHAP scorecard computation function
+        scorecard_dict = {
+            "pdo": pdo,
+            "target_points": target_points,
+            "target_odds": target_odds,
+        }
+
+        # Compute SHAP-based scores using the dedicated function
+        # Use default negate_shap=True (same as XGBoost/LightGBM) since SHAP values have same sign convention
+        scorecard_df = compute_shap_scores(
+            shap_values=shap_values,
+            base_value=base_value,
+            feature_names=features.columns.tolist(),
+            scorecard_dict=scorecard_dict,
+        )
+
+        # Extract final scores
+        scores = scorecard_df["score"]
+
+        return pd.Series(scores, name="Score")
 
     def transform(self, features: Union[pd.DataFrame, Dict[str, Any]]) -> pd.DataFrame:
         """
@@ -456,20 +585,14 @@ class CatBoostScorecardConstructor:
         scorecard = self.construct_scorecard().copy()
 
         # Select value column based on score_type
-        if score_type == "SHAP":
-            if "SHAP" not in scorecard.columns:
-                raise ValueError(
-                    "SHAP column not found in scorecard. "
-                    "Please call construct_scorecard() first to compute SHAP values."
-                )
-            value_col = "SHAP"
-        elif score_type == "XAddEvidence":
+        if score_type == "XAddEvidence":
             value_col = "XAddEvidence"
         else:  # Default to WOE
             value_col = "WOE"
 
-        # Base score from average event rate if available
+        # Get base value based on score_type
         if "EventRate" in scorecard.columns:
+            # For WOE/XAddEvidence, use average event rate
             base_odds = scorecard["EventRate"].mean() / (1 - scorecard["EventRate"].mean())
         else:
             base_odds = target_odds  # fallback
@@ -480,7 +603,8 @@ class CatBoostScorecardConstructor:
 
         # Raw contribution score from selected value column
         n_trees = len(scorecard["Tree"].unique())
-        scorecard["RawScore"] = -factor * scorecard[value_col]
+        # Don't negate here - match XGBoost approach: negate in formula instead
+        scorecard["RawScore"] = factor * scorecard[value_col]
         scorecard["RawScore"] /= n_trees  # Normalize by number of trees
 
         # Align maximum score within each tree
@@ -489,8 +613,11 @@ class CatBoostScorecardConstructor:
         mean_shift = (tree_max.sum() - offset) / len(tree_max)
 
         # Calculate points using apply
+        # Match XGBoost formula: -ScaledScore + var_offsets - shft_base_pts
+        # So: -RawScore + tree_max - mean_shift
+        # This ensures higher XAddEvidence (higher risk) results in lower scores
         scorecard["Points"] = scorecard.apply(
-            lambda row: tree_max[row.name] - row["RawScore"] - mean_shift, axis=1
+            lambda row: -row["RawScore"] + tree_max[row.name] - mean_shift, axis=1
         )
         scorecard.reset_index(inplace=True)
 
@@ -519,23 +646,39 @@ class CatBoostScorecardConstructor:
 
         return scorecard
 
-    def predict_scores(self, features: Union[pd.DataFrame, Dict[str, Any]]) -> pd.DataFrame:
+    def predict_scores(
+        self,
+        features: Union[pd.DataFrame, Dict[str, Any]],
+        method: Optional[str] = None,
+        pdo: float = 50,
+        target_points: float = 600,
+        target_odds: float = 19,
+    ) -> pd.DataFrame:
         """
-        Predict scores for each tree and total score.
+        Predict decomposed scores for a given dataset.
 
         Args:
             features: Input features as DataFrame or dictionary
+            method: Scoring method to use:
+                - None (default): Use traditional scorecard-based approach (tree-level decomposition)
+                - 'shap': Use SHAP values directly (feature-level decomposition)
+            pdo: Points to Double the Odds (only used for method='shap')
+            target_points: Target score for reference odds (only used for method='shap')
+            target_odds: Reference odds ratio (only used for method='shap')
 
         Returns:
-            DataFrame with columns for each tree's score and total score
+            DataFrame with decomposed scores (tree-level for default, feature-level for SHAP)
         """
+        if method == "shap":
+            return self._predict_scores_shap(features, pdo, target_points, target_odds)
+
+        # Default: use traditional scorecard-based approach (tree-level decomposition)
         if self.mapper is None:
             raise ValueError("Mapper not initialized. Call fit() first.")
 
         # Get scores for each tree
         tree_scores = {}
         for tree_idx in self.tree_indices:
-            # tree_data = self.scorecard[self.scorecard["Tree"] == tree_idx]  # Not used
             if isinstance(features, dict):
                 features_df = pd.DataFrame([features])
             else:
@@ -548,6 +691,62 @@ class CatBoostScorecardConstructor:
         scores_df = pd.DataFrame(tree_scores)
         scores_df["Score"] = scores_df.sum(axis=1)
         return scores_df
+
+    def _predict_scores_shap(
+        self,
+        features: Union[pd.DataFrame, Dict[str, Any]],
+        pdo: float = 50,
+        target_points: float = 600,
+        target_odds: float = 19,
+    ) -> pd.DataFrame:
+        """
+        Predict decomposed scores using SHAP values (feature-level decomposition).
+
+        Args:
+            features: Input features DataFrame or dictionary
+            pdo: Points to Double the Odds
+            target_points: Target score for reference odds
+            target_odds: Reference odds ratio
+
+        Returns:
+            DataFrame with feature-level score contributions and total score
+        """
+        if self.model is None:
+            raise ValueError("Model not set. Call fit() first.")
+
+        # Convert dict to DataFrame if needed
+        if isinstance(features, dict):
+            features_df = pd.DataFrame([features])
+        else:
+            features_df = features.copy()
+
+        # Create Pool for CatBoost
+        dummy_labels = np.zeros(len(features_df))
+        pool = Pool(features_df, dummy_labels)
+
+        # Extract SHAP values for input features
+        shap_values_full = self.extract_shap_values(pool)  # Shape: (n_samples, n_features + 1)
+        shap_values = shap_values_full[:, :-1]  # Feature contributions
+        base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
+
+        # Use the SHAP scorecard computation function
+        scorecard_dict = {
+            "pdo": pdo,
+            "target_points": target_points,
+            "target_odds": target_odds,
+        }
+
+        # Compute SHAP-based scores with feature-level decomposition
+        # Use default negate_shap=True (same as XGBoost/LightGBM) since SHAP values have same sign convention
+        scorecard_df = compute_shap_scores(
+            shap_values=shap_values,
+            base_value=base_value,
+            feature_names=features_df.columns.tolist(),
+            scorecard_dict=scorecard_dict,
+        )
+
+        # Return DataFrame with feature scores and total score
+        return scorecard_df
 
     def generate_sql_query(self):
         """

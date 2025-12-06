@@ -572,10 +572,11 @@ class CatBoostWOEMapper:
                 if not isinstance(conditions, str) or not np.any(unassigned):
                     continue
 
-                # Only process unassigned rows
-                subset = df.loc[unassigned_indices[unassigned]]
-                if len(subset) == 0:
+                # Only process unassigned rows (use iloc for position-based indexing)
+                unassigned_positions = unassigned_indices[unassigned]
+                if len(unassigned_positions) == 0:
                     continue
+                subset = df.iloc[unassigned_positions]
 
                 # Apply conditions directly to subset using pandas filtering
                 matches = np.ones(len(subset), dtype=bool)
@@ -613,12 +614,11 @@ class CatBoostWOEMapper:
                 if not valid_filter:
                     continue
 
-                # Get indices of matching rows in the original array
+                # Get positions of matching rows in the original array
                 if np.any(matches):
-                    matching_subset_indices = subset.index[matches]
-                    matching_positions = np.where(
-                        np.isin(unassigned_indices, matching_subset_indices)
-                    )[0]
+                    # Since we used iloc, matches correspond to positions in unassigned_positions
+                    matching_positions_in_subset = np.where(matches)[0]
+                    matching_positions = unassigned_positions[matching_positions_in_subset]
 
                     # Add the leaf value to matching rows
                     value = leaf[value_col]
