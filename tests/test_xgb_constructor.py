@@ -291,6 +291,39 @@ def test_construct_scorecard(scorecard_constructor):  # pylint: disable=W0621
     scorecard = scorecard_constructor.construct_scorecard()
     assert isinstance(scorecard, pd.DataFrame)
     assert not scorecard.empty
+    # Verify SHAP column exists (Alpha feature)
+    assert "SHAP" in scorecard.columns
+
+
+def test_shap_integration(scorecard_constructor):  # pylint: disable=W0621
+    """
+    Test SHAP integration in XGBScorecardConstructor (Alpha feature).
+
+    Parameters:
+    - scorecard_constructor: An instance of the XGBScorecardConstructor class.
+
+    Returns:
+    - None
+
+    Raises:
+    - AssertionError: If SHAP integration doesn't work correctly.
+    """
+    # Test extract_shap_values method
+    X = scorecard_constructor.X  # pylint: disable=C0103
+    shap_values = scorecard_constructor.extract_shap_values(X)
+    assert shap_values.shape[0] == X.shape[0]  # Same number of samples
+    assert shap_values.shape[1] == X.shape[1] + 1  # Features + base_score
+
+    # Test construct_scorecard includes SHAP column
+    scorecard = scorecard_constructor.construct_scorecard()
+    assert "SHAP" in scorecard.columns
+    assert scorecard["SHAP"].dtype in [float, "float64"]
+
+    # Test create_points with SHAP score_type
+    points_shap = scorecard_constructor.create_points(score_type="SHAP")
+    assert isinstance(points_shap, pd.DataFrame)
+    assert not points_shap.empty
+    assert "Points" in points_shap.columns
 
 
 def test_create_points(scorecard_constructor):  # pylint: disable=W0621

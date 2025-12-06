@@ -213,6 +213,25 @@ class XGBScorecardConstructor:
             df_leafs[f"tree_{i}"] = tree_leafs.flatten()
         return df_leafs
 
+    def extract_shap_values(self, X: pd.DataFrame) -> np.ndarray:  # pylint: disable=C0103
+        """
+        Extract SHAP values from XGBoost model using native pred_contribs.
+
+        Args:
+            X: Input features DataFrame
+
+        Returns:
+            Array of shape (n_samples, n_features + 1) where last column is base_score.
+            Feature SHAP values are in columns [:, :-1], base_score is in column [:, -1].
+        """
+        scores = np.full((X.shape[0],), self.base_score)
+        if self.enable_categorical:
+            dmatrix = xgb.DMatrix(X, base_margin=scores, enable_categorical=True)
+        else:
+            dmatrix = xgb.DMatrix(X, base_margin=scores)
+        shap_values = self.booster_.predict(dmatrix, pred_contribs=True)
+        return shap_values
+
     def extract_leaf_weights(self) -> pd.DataFrame:
         """
         Extracts the leaf weights from the booster's trees and returns a DataFrame.
@@ -275,6 +294,52 @@ class XGBScorecardConstructor:
         )
 
         return leaf_weights_df
+
+    def _add_shap_column(self, tree_leaf_idx: np.ndarray) -> None:
+        """
+        Add SHAP column to scorecard by aggregating SHAP values per leaf.
+
+        Args:
+            tree_leaf_idx: Array of shape (n_samples, n_trees) with leaf indices
+        """
+        # Extract SHAP values for all training samples
+        shap_values = self.extract_shap_values(self.X)  # Shape: (n_samples, n_features + 1)
+        shap_features = shap_values[:, :-1]  # Exclude base_score column
+
+        # Create feature name to index mapping
+        feature_to_idx = {name: idx for idx, name in enumerate(self.X.columns)}
+
+        # Initialize SHAP column
+        self.xgb_scorecard["SHAP"] = 0.0
+
+        # For each row in scorecard, aggregate SHAP values
+        for idx, row in self.xgb_scorecard.iterrows():
+            tree_idx = int(row["Tree"])
+            node_idx = int(row["Node"])
+            feature_name = row["Feature"]
+
+            # Skip if feature is not in training data (shouldn't happen, but safety check)
+            if feature_name not in feature_to_idx:
+                continue
+
+            feature_idx = feature_to_idx[feature_name]
+
+            # Find samples that land in this leaf
+            samples_in_leaf = tree_leaf_idx[:, tree_idx] == node_idx
+
+            if not samples_in_leaf.any():
+                continue
+
+            # Get SHAP values for this feature for samples in this leaf
+            shap_for_feature = shap_features[samples_in_leaf, feature_idx]
+
+            if len(shap_for_feature) > 0:
+                # Use simple average (all samples in leaf have equal weight)
+                # The Count column already represents the number of samples in the leaf,
+                # so we're effectively computing the mean SHAP value per feature per leaf
+                self.xgb_scorecard.loc[idx, "SHAP"] = float(np.mean(shap_for_feature))
+            else:
+                self.xgb_scorecard.loc[idx, "SHAP"] = 0.0
 
     def extract_decision_nodes(self) -> pd.DataFrame:
         """
@@ -397,6 +462,10 @@ class XGBScorecardConstructor:
         self.xgb_scorecard = self.xgb_scorecard.sort_values(by=["Tree", "Node"]).reset_index(
             drop=True
         )
+
+        # Add SHAP values column
+        self._add_shap_column(tree_leaf_idx)
+
         # Get WOE and IV scores
         self.xgb_scorecard["WOE"] = calculate_weight_of_evidence(self.xgb_scorecard)["WOE"]
         self.xgb_scorecard["IV"] = calculate_information_value(self.xgb_scorecard)["IV"]
@@ -424,6 +493,7 @@ class XGBScorecardConstructor:
                 "WOE",
                 "IV",
                 "XAddEvidence",
+                "SHAP",
                 "DetailedSplit",
             ]
         ]
@@ -459,6 +529,7 @@ class XGBScorecardConstructor:
         Options:
             - 'XAddEvidence': Uses XGBoost's log-odds score (leaf weight or margin).
             - 'WOE': Uses Weight-of-Evidence (WOE) score (Experimental).
+            - 'SHAP': Uses SHAP values aggregated per leaf (Alpha - for depth>1 models).
 
         scorecard: pd.DataFrame, optional
             An external scorecard to use for creating points, by default None.
@@ -470,6 +541,11 @@ class XGBScorecardConstructor:
         For WOE score type, individual WOE scores are adjusted by the learning rate
         and divided by the maximum number of nodes per tree to make them more
         similar to the range of XAddEvidence scores.
+
+        For SHAP score type (Alpha), SHAP values are aggregated per leaf using
+        weighted average. This is particularly useful for models with max_depth > 1
+        where interpretability becomes challenging. SHAP values provide feature
+        attribution that accounts for feature interactions.
 
         References:
         NVIDIA GTC Talk "Machine Learning in Retail Credit Risk" by Paul Edwards.
@@ -492,8 +568,10 @@ class XGBScorecardConstructor:
         if self.score_type is None:
             self.score_type = score_type
 
-        if score_type not in {"XAddEvidence", "WOE"}:
-            raise ValueError("constructor.py: score must be one of 'XAddEvidence' or 'WOE'")
+        if score_type not in {"XAddEvidence", "WOE", "SHAP"}:
+            raise ValueError(
+                "constructor.py: score must be one of 'XAddEvidence', 'WOE', or 'SHAP'"
+            )
         try:
             if self.xgb_scorecard is None:
                 raise ValueError("xgb_scorecard is None and dataframe is None.")
@@ -502,20 +580,27 @@ class XGBScorecardConstructor:
             base_score = (
                 self.y.mean() / (1 - self.y.mean()) if score_type == "WOE" else self.base_score
             )
-            scdf = (
-                self.xgb_scorecard.copy()
-                .assign(
-                    Score=np.where(
-                        score_type == "XAddEvidence",
-                        self.xgb_scorecard.XAddEvidence,
-                        (
-                            (self.xgb_scorecard.WOE * self.learning_rate)
-                            # TODO: Make adjustable in the future
-                            / self.xgb_scorecard["Node"].max()
-                        ),
-                    )
+            if score_type == "XAddEvidence":
+                score_col = self.xgb_scorecard.XAddEvidence
+            elif score_type == "WOE":
+                score_col = (
+                    (self.xgb_scorecard.WOE * self.learning_rate)
+                    # TODO: Make adjustable in the future
+                    / self.xgb_scorecard["Node"].max()
                 )
-                .assign(base_score=base_score)  # pylint: disable=E1101
+            elif score_type == "SHAP":
+                # Check if SHAP column exists
+                if "SHAP" not in self.xgb_scorecard.columns:
+                    raise ValueError(
+                        "SHAP column not found in scorecard. "
+                        "Please call construct_scorecard() first to compute SHAP values."
+                    )
+                score_col = self.xgb_scorecard.SHAP
+            else:
+                raise ValueError(f"Unknown score_type: {score_type}")
+
+            scdf = (
+                self.xgb_scorecard.copy().assign(Score=score_col).assign(base_score=base_score)  # pylint: disable=E1101
             )
         except KeyError as e:
             raise ValueError(f"Invalid columns in xgb_scorecard: {e}") from e

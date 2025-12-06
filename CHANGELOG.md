@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.8a1] - 2025-12-04 (Alpha)
+
+### Added
+- **SHAP Integration (Alpha)**: Added SHAP-based scorecard construction for all three libraries
+  - **XGBoost**: Native SHAP extraction using `pred_contribs=True`
+  - **LightGBM**: Native SHAP extraction using `pred_contrib=True`
+  - **CatBoost**: Native SHAP extraction using `get_feature_importance(type='ShapValues')`
+  - SHAP values are aggregated per leaf using weighted average
+  - New `score_type="SHAP"` option in `create_points()` method
+  - SHAP column automatically added to scorecard during `construct_scorecard()`
+  - Particularly useful for models with `max_depth > 1` where interpretability is challenging
+  - No external dependencies required (uses native SHAP implementations)
+
+### Technical Details
+- All three constructors now support SHAP: `XGBScorecardConstructor`, `LGBScorecardConstructor`, `CatBoostScorecardConstructor`
+- SHAP values computed using native library methods (no shap package dependency)
+- SHAP aggregation: simple average per (Tree, Node, Feature) combination
+- Backward compatible: SHAP is opt-in via `score_type="SHAP"` parameter
+- Alpha release for testing and feedback
+
 ## [0.2.7] - 2025-12-04
 
 ### Changed

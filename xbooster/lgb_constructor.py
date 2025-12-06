@@ -199,6 +199,20 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
 
         return df_leafs
 
+    def extract_shap_values(self, X: pd.DataFrame) -> np.ndarray:  # pylint: disable=C0103
+        """
+        Extract SHAP values from LightGBM model using native pred_contrib.
+
+        Args:
+            X: Input features DataFrame
+
+        Returns:
+            Array of shape (n_samples, n_features + 1) where last column is base_score.
+            Feature SHAP values are in columns [:, :-1], base_score is in column [:, -1].
+        """
+        shap_values = self.model.predict(X, pred_contrib=True)
+        return shap_values
+
     def extract_leaf_weights(self) -> pd.DataFrame:
         """
         Extract leaf weights from the LightGBM model.
@@ -272,6 +286,50 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
 
         return leaf_weights_df
 
+    def _add_shap_column(self, tree_leaf_idx: np.ndarray) -> None:
+        """
+        Add SHAP column to scorecard by aggregating SHAP values per leaf.
+
+        Args:
+            tree_leaf_idx: Array of shape (n_samples, n_trees) with leaf indices
+        """
+        # Extract SHAP values for all training samples
+        shap_values = self.extract_shap_values(self.X)  # Shape: (n_samples, n_features + 1)
+        shap_features = shap_values[:, :-1]  # Exclude base_score column
+
+        # Create feature name to index mapping
+        feature_to_idx = {name: idx for idx, name in enumerate(self.X.columns)}
+
+        # Initialize SHAP column
+        self.lgb_scorecard["SHAP"] = 0.0
+
+        # For each row in scorecard, aggregate SHAP values
+        for idx, row in self.lgb_scorecard.iterrows():
+            tree_idx = int(row["Tree"])
+            node_idx = int(row["Node"])
+            feature_name = row["Feature"]
+
+            # Skip if feature is not in training data (shouldn't happen, but safety check)
+            if feature_name not in feature_to_idx:
+                continue
+
+            feature_idx = feature_to_idx[feature_name]
+
+            # Find samples that land in this leaf
+            samples_in_leaf = tree_leaf_idx[:, tree_idx] == node_idx
+
+            if not samples_in_leaf.any():
+                continue
+
+            # Get SHAP values for this feature for samples in this leaf
+            shap_for_feature = shap_features[samples_in_leaf, feature_idx]
+
+            if len(shap_for_feature) > 0:
+                # Use simple average (all samples in leaf have equal weight)
+                self.lgb_scorecard.loc[idx, "SHAP"] = float(np.mean(shap_for_feature))
+            else:
+                self.lgb_scorecard.loc[idx, "SHAP"] = 0.0
+
     def construct_scorecard(self) -> pd.DataFrame:
         """
         Construct a scorecard by combining leaf weights with event statistics.
@@ -343,6 +401,10 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         self.lgb_scorecard = self.lgb_scorecard.sort_values(by=["Tree", "Node"]).reset_index(
             drop=True
         )
+
+        # Add SHAP values column
+        self._add_shap_column(tree_leaf_idx)
+
         # Get WOE and IV scores
         self.lgb_scorecard["WOE"] = calculate_weight_of_evidence(self.lgb_scorecard)["WOE"]
         self.lgb_scorecard["IV"] = calculate_information_value(self.lgb_scorecard)["IV"]
@@ -367,6 +429,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
                 "WOE",
                 "IV",
                 "XAddEvidence",
+                "SHAP",
             ]
         ]
         return self.lgb_scorecard
@@ -388,7 +451,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             target_points: Points at target odds
             target_odds: Target odds ratio
             precision_points: Decimal precision for points
-            score_type: Must be 'XAddEvidence' (only supported type for LightGBM)
+            score_type: Must be 'XAddEvidence' or 'SHAP' (only supported types for LightGBM)
             use_base_score: If True, normalize Tree 0 by subtracting base_score and add
                 logit(base_score) during scaling. This ensures all trees contribute
                 proportionally. Default: True (recommended).
@@ -412,9 +475,9 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         self.precision_points = precision_points
         self.score_type = score_type
 
-        if score_type != "XAddEvidence":
+        if score_type not in {"XAddEvidence", "SHAP"}:
             raise ValueError(
-                "Only 'XAddEvidence' score_type is supported for LightGBM. "
+                "Only 'XAddEvidence' and 'SHAP' score_type are supported for LightGBM. "
                 "WOE-based scoring is not recommended due to base_score normalization issues."
             )
 
@@ -428,8 +491,16 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         # Create scorecard with points
         scdf = self.lgb_scorecard.copy()
 
-        # Normalize Tree 0 by subtracting base_score (if enabled)
-        if use_base_score:
+        # Select score column based on score_type
+        if score_type == "SHAP":
+            # Check if SHAP column exists
+            if "SHAP" not in scdf.columns:
+                raise ValueError(
+                    "SHAP column not found in scorecard. "
+                    "Please call construct_scorecard() first to compute SHAP values."
+                )
+            scdf["Score"] = scdf["SHAP"]
+        elif use_base_score:
             # IMPORTANT: LightGBM sklearn API includes base_score in the first tree's leaves.
             # We need to subtract base_score from Tree 0 to normalize all trees to the same scale.
             # This ensures each tree gets proportional weight in the scorecard (like XGBoost).
