@@ -203,7 +203,7 @@ Both methods are mathematically equivalent and produce matching scores when usin
 
 ## 4. Example Code
 
-A complete working example demonstrating the equivalence is available in [`examples/leaf_weights_vs_shap.py`](../examples/leaf_weights_vs_shap.py):
+A complete working example demonstrating the equivalence is available in [shap-in-leaf-weights.ipynb](../examples/shap-in-leaf-weights.ipynb).
 
 ```python
 from xbooster.xgb_constructor import XGBScorecardConstructor
