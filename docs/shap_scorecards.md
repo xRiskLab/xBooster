@@ -229,10 +229,7 @@ table_shap_sum = [
 assert np.allclose(feature_shap_sum, table_shap_sum)
 ```
 
-Run the example:
-```bash
-uv run python examples/leaf_weights_vs_shap.py
-```
+Consult the example notebook [shap-in-leaf-weights.ipynb](../examples/shap-in-leaf-weights.ipynb) for a complete working example.
 
 ## References
 
