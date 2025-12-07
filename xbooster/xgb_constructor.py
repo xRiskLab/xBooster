@@ -9,25 +9,11 @@ The class provides methods for extracting leaf weights, constructing the
 scorecard, creating points, and predicting scores based on the constructed
 scorecard.
 
-Example usage:
-
-    import pandas as pd
-    from sklearn.metrics import roc_auc_score
-    import xgboost as xgb
-
-    # Instantiate the XGBScorecardConstructor
-    scorecard_constructor = XGBScorecardConstructor(
-        xgb_model, X.loc[ix_train], y.loc[ix_train]
-    )
-    # Generate a scorecard
-    scorecard_constructor.construct_scorecard()
-    xgb_scorecard_with_points = scorecard_constructor.create_points(
-        pdo=50, target_points=600, target_odds=50
-    )
-    # Make predictions using the scorecard
-    credit_scores = scorecard_constructor.predict_score(X.loc[ix_test])
-    gini = roc_auc_score(y.loc[ix_test], -credit_scores) * 2 - 1
-    print(f"Test Gini score: {gini:.2%}")
+Authors: Denis Burakov, Paul Edwards, Juan Antonio Montero de Espinosa
+Github: @deburky, @pedwardsada, @jmonteroers
+License: MIT
+This code is licensed under the MIT License.
+Copyright (c) 2025 xRiskLab
 """
 
 import json
@@ -316,9 +302,12 @@ class XGBScorecardConstructor:
 
         return decision_nodes_df
 
-    def construct_scorecard(self) -> pd.DataFrame:  # pylint: disable=R0914
+    def construct_scorecard(self, shap: bool = False) -> pd.DataFrame:  # pylint: disable=R0914
         """
         Constructs a scorecard based on a booster.
+
+        Args:
+            shap: If True, add average SHAP values per leaf to the scorecard
 
         Returns:
             pd.DataFrame: The constructed scorecard.
@@ -411,26 +400,107 @@ class XGBScorecardConstructor:
         # Retrieve a detailed split
         self.xgb_scorecard = self.add_detailed_split(dataframe=self.xgb_scorecard)
 
-        self.xgb_scorecard = self.xgb_scorecard[
-            [
-                "Tree",
-                "Node",
-                "Feature",
-                "Sign",
-                "Split",
-                "Count",
-                "CountPct",
-                "NonEvents",
-                "Events",
-                "EventRate",
-                "WOE",
-                "IV",
-                "XAddEvidence",
-                "DetailedSplit",
-            ]
+        # Add average SHAP values per leaf if requested
+        if shap:
+            self.xgb_scorecard = self._add_average_shap_to_scorecard(self.xgb_scorecard)
+
+        # Build column list
+        base_columns = [
+            "Tree",
+            "Node",
+            "Feature",
+            "Sign",
+            "Split",
+            "Count",
+            "CountPct",
+            "NonEvents",
+            "Events",
+            "EventRate",
+            "WOE",
+            "IV",
+            "XAddEvidence",
+            "DetailedSplit",
         ]
 
-        return self.xgb_scorecard
+        # Add SHAP column if it exists
+        if "SHAP" in self.xgb_scorecard.columns:
+            base_columns.append("SHAP")
+
+        return self.xgb_scorecard[base_columns]
+
+    def _add_average_shap_to_scorecard(self, scorecard: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add per-tree SHAP values to the scorecard.
+
+        For each (Tree, Node) combination, we compute the margin contribution from that
+        specific tree. This is deterministic per leaf - all observations in the same leaf
+        receive the same contribution from that tree.
+
+        The SHAP value is adjusted so that sum(Table SHAP) = sum(Feature SHAP), making
+        the table SHAP values consistent with predict_score(method="shap").
+
+        Args:
+            scorecard: The scorecard DataFrame
+
+        Returns:
+            Scorecard with SHAP column added (per-tree margin contribution, adjusted)
+        """
+        try:
+            # Get per-tree margin contributions (deterministic per leaf)
+            margin_per_tree = self.get_leafs(self.X, output_type="margin")
+
+            # Get leaf indices for training data
+            leaf_indices_df = self.get_leafs(self.X, output_type="leaf_index")
+
+            # Compute base value adjustment
+            # The per-tree margins use constructor's base_score, but TreeSHAP uses a different
+            # base_value. We need to adjust so that sum(Table SHAP) = sum(Feature SHAP).
+            shap_values_full = extract_shap_values_xgb(
+                self.model, self.X.head(1), self.base_score, self.enable_categorical
+            )
+            shap_base_value = float(shap_values_full[0, -1])
+            n_trees = len(scorecard["Tree"].unique())
+            # Distribute the adjustment across all trees
+            base_adjustment = (self.base_score - shap_base_value) / n_trees
+
+            # Initialize SHAP column
+            scorecard["SHAP"] = np.nan
+
+            # For each (Tree, Node) combination, get the per-tree margin (deterministic per leaf)
+            for tree_idx in scorecard["Tree"].unique():
+                tree_col = f"tree_{tree_idx}"
+                tree_margins = margin_per_tree[tree_col].values
+                tree_leaf_indices = leaf_indices_df[tree_col].values
+
+                for _, leaf_row in scorecard[scorecard["Tree"] == tree_idx].iterrows():
+                    node_idx = leaf_row["Node"]
+
+                    # Find observations that fall into this leaf
+                    mask = tree_leaf_indices == node_idx
+
+                    if mask.any():
+                        # All observations in the same leaf have the same margin from this tree
+                        leaf_margin = tree_margins[mask][0]
+
+                        # Apply base adjustment so Table SHAP matches Feature SHAP
+                        adjusted_margin = leaf_margin + base_adjustment
+
+                        # Update scorecard
+                        scorecard.loc[
+                            (scorecard["Tree"] == tree_idx) & (scorecard["Node"] == node_idx),
+                            "SHAP",
+                        ] = adjusted_margin
+
+            return scorecard
+
+        except Exception as e:
+            # If extraction fails, return scorecard without SHAP column
+            import warnings
+
+            warnings.warn(
+                f"Failed to add SHAP values to scorecard: {e}. Returning scorecard without SHAP."
+            )
+            return scorecard
 
     def create_points(  # pylint: disable=R0913
         self,
@@ -517,18 +587,18 @@ class XGBScorecardConstructor:
             elif score_type == "WOE":
                 # For WOE, use average event rate
                 base_score = self.y.mean() / (1 - self.y.mean())
-            else:
-                # For XAddEvidence, use model's base_score
-                base_score = self.base_score
-            if score_type == "XAddEvidence":
-                score_col = self.xgb_scorecard.XAddEvidence
-            elif score_type == "WOE":
                 score_col = (
                     (self.xgb_scorecard.WOE * self.learning_rate)
                     # TODO: Make adjustable in the future
                     / self.xgb_scorecard["Node"].max()
                 )
+            elif score_type == "XAddEvidence":
+                # For XAddEvidence, use model's base_score
+                base_score = self.base_score
+                score_col = self.xgb_scorecard.XAddEvidence
             else:
+                # For XAddEvidence, use model's base_score
+                base_score = self.base_score
                 raise ValueError(f"Unknown score_type: {score_type}")
 
             scdf = (
@@ -689,6 +759,7 @@ class XGBScorecardConstructor:
         pdo: int = 50,
         target_points: int = 600,
         target_odds: int = 19,
+        intercept_based: bool = True,
     ) -> pd.DataFrame:
         """
         Predicts decomposed scores for a given dataset.
@@ -701,6 +772,7 @@ class XGBScorecardConstructor:
         - pdo: Points to Double the Odds (only used for method='shap')
         - target_points: Target score for reference odds (only used for method='shap')
         - target_odds: Reference odds ratio (only used for method='shap')
+        - intercept_based: If True, distribute intercept and offset across features (default: True)
 
         Returns:
         - pd.DataFrame: Decomposed scores (tree-level for default, feature-level for SHAP)
@@ -710,7 +782,7 @@ class XGBScorecardConstructor:
             pdo = self.pdo if self.pdo is not None else pdo
             target_points = self.target_points if self.target_points is not None else target_points
             target_odds = self.target_odds if self.target_odds is not None else target_odds
-            return self._predict_scores_shap(X, pdo, target_points, target_odds)
+            return self._predict_scores_shap(X, pdo, target_points, target_odds, intercept_based)
 
         # Default: use traditional scorecard-based approach (tree-level decomposition)
         return self._convert_tree_to_points(X)
@@ -721,6 +793,7 @@ class XGBScorecardConstructor:
         pdo: int = 50,
         target_points: int = 600,
         target_odds: int = 19,
+        intercept_based: bool = True,
     ) -> pd.DataFrame:
         """
         Predict decomposed scores using SHAP values (feature-level decomposition).
@@ -730,6 +803,7 @@ class XGBScorecardConstructor:
             pdo: Points to Double the Odds
             target_points: Target score for reference odds
             target_odds: Reference odds ratio
+            intercept_based: If True, distribute intercept and offset across features (default: True)
 
         Returns:
             DataFrame with feature-level score contributions and total score
@@ -748,16 +822,13 @@ class XGBScorecardConstructor:
             "target_odds": target_odds,
         }
 
-        # Compute SHAP-based scores with feature-level decomposition
-        scorecard_df = compute_shap_scores(
+        return compute_shap_scores(
             shap_values=shap_values,
             base_value=base_value,
             feature_names=X.columns.tolist(),
             scorecard_dict=scorecard_dict,
+            intercept_based=intercept_based,
         )
-
-        # Return DataFrame with feature scores and total score
-        return scorecard_df
 
     @property
     def sql_query(self):

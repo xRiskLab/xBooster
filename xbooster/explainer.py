@@ -3,48 +3,11 @@ explainer.py - XGBoost Scorecard Explainer
 
 This module provides utilities for interpretability of XGBoost models built for scoring purposes.
 
-Functions:
-    - build_interactions_splits(scorecard_constructor):
-        Build interactions splits dataframe from the xgb_scorecard_with_splits.
-        In this we perform aggregation of features for each split by assigning the same gain
-        to all features used in the split. For `max_depth > 1`, each split is a combination
-        of features and for `max_depth = 1`, each split is a single feature. This means
-        that what one sees in the final leaf node is not the only feature used for a split.
-
-    - plot_importance(scorecard_constructor=None, metric="Likelihood", **kwargs):
-        Calculates and plots the importance of features based on the XGBoost scorecard.
-        The 'Likelihood' metric is used as the default metric, while other metrics,
-        such as 'Points', 'NegLogLikelihood', 'IV', can be used as well.
-
-    - plot_local_importance(scorecard_constructor, X: pd.DataFrame, **kwargs):
-        Plot local importance based on the provided scorecard constructor and a sample,
-        which needs to be explained.
-
-    - plot_tree(scorecard_constructor, num_trees=0, **kwargs):
-        Plot tree visualization for the XGBoost model and show the metrics of interest.
-        TODOs: Available options are to be documented.
-
-    - plot_catboost_importance(scorecard_constructor: Optional[CatBoostScorecardConstructor] = None,
-                              metric: str = "XAddEvidence",
-                              normalize: bool = True,
-                              max_features: int = 20,
-                              fontfamily: Optional[str] = "Monospace",
-                              fontsize: Optional[int] = 12,
-                              dpi: Optional[int] = 100,
-                              title: Optional[str] = "Feature importance",
-                              **kwargs: Any) -> None:
-        Plot feature importance for CatBoost scorecard.
-
-        Args:
-            scorecard_constructor: CatBoostScorecardConstructor instance
-            metric: Metric to use for importance ('XAddEvidence', 'WOE', 'IV')
-            normalize: Whether to normalize the importance values
-            max_features: Maximum number of features to display (default: 20)
-            fontfamily: Font family for the plot
-            fontsize: Font size for the plot
-            dpi: DPI for the plot
-            title: Title for the plot
-            **kwargs: Additional arguments to pass to matplotlib
+Authors: Denis Burakov
+Github: @deburky
+License: MIT
+This code is licensed under the MIT License.
+Copyright (c) 2025 xRiskLab
 """
 
 import re
@@ -65,7 +28,7 @@ def extract_splits_info(features: str) -> List[Dict[str, Union[str, float]]]:
     """Extracts split information from the DetailedSplit feature."""
     splits_info = []
     features = re.sub(r"\s*or missing\s*,?\s*", ", ", features)  # NOTE: Missing values
-    feature_names = sorted(set(re.findall(r"\b([^\d\W]+)\b", features)))
+    feature_names = sorted(set[Any](re.findall(r"\b([^\d\W]+)\b", features)))
     for feature in feature_names:
         regex = re.compile(rf"\b{feature}\b\s*(?P<sign>[<>=]+)\s*(?P<value>[^,]+)")
         if match := regex.search(features):
@@ -129,7 +92,7 @@ def build_interactions_splits(  # pylint: disable=R0914
         # Find sign and value that corresponds to each feature in the split
         splits_info = []
         features = re.sub(r"\s*or missing\s*,?\s*", ", ", features)  # NOTE: Missing values
-        feature_names = sorted(set(re.findall(r"\b([^\d\W]+)\b", features)))
+        feature_names = sorted(set[Any](re.findall(r"\b([^\d\W]+)\b", features)))
 
         for feature in feature_names:
             regex = re.compile(rf"\b{feature}\b\s*(?P<sign>[<>=]+)\s*(?P<value>[^,]+)")

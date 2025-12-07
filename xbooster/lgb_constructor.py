@@ -12,25 +12,12 @@ The class provides methods for extracting leaf weights, constructing the
 scorecard, creating points, and predicting scores based on the constructed
 scorecard.
 
-Example usage (to be implemented):
+Authors: Denis Burakov, Sangjun Moon
+Github: @deburky, @RektPunk
+License: MIT
+This code is licensed under the MIT License.
+Copyright (c) 2025 xRiskLab
 
-    import pandas as pd
-    from sklearn.metrics import roc_auc_score
-    import lightgbm as lgb
-
-    # Instantiate the LGBScorecardConstructor
-    scorecard_constructor = LGBScorecardConstructor(
-        lgb_model, X.loc[ix_train], y.loc[ix_train]
-    )
-    # Generate a scorecard
-    scorecard_constructor.construct_scorecard()
-    lgb_scorecard_with_points = scorecard_constructor.create_points(
-        pdo=50, target_points=600, target_odds=50
-    )
-    # Make predictions using the scorecard
-    credit_scores = scorecard_constructor.predict_score(X.loc[ix_test])
-    gini = roc_auc_score(y.loc[ix_test], -credit_scores) * 2 - 1
-    print(f"Test Gini score: {gini:.2%}")
 """
 
 from typing import Optional
@@ -613,6 +600,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         pdo: int = 50,
         target_points: int = 600,
         target_odds: int = 19,
+        intercept_based: bool = True,
     ) -> pd.DataFrame:
         """
         Predict decomposed scores for a given dataset.
@@ -625,6 +613,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             pdo: Points to Double the Odds (only used for method='shap')
             target_points: Target score for reference odds (only used for method='shap')
             target_odds: Reference odds ratio (only used for method='shap')
+            intercept_based: If True, distribute intercept and offset across features (default: True)
 
         Returns:
             DataFrame with decomposed scores (tree-level for default, feature-level for SHAP)
@@ -634,7 +623,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             pdo = self.pdo if self.pdo is not None else pdo
             target_points = self.target_points if self.target_points is not None else target_points
             target_odds = self.target_odds if self.target_odds is not None else target_odds
-            return self._predict_scores_shap(X, pdo, target_points, target_odds)
+            return self._predict_scores_shap(X, pdo, target_points, target_odds, intercept_based)
 
         # Default: use traditional scorecard-based approach (tree-level decomposition)
         return self._convert_tree_to_points(X)
@@ -645,6 +634,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         pdo: int = 50,
         target_points: int = 600,
         target_odds: int = 19,
+        intercept_based: bool = True,
     ) -> pd.DataFrame:
         """
         Predict decomposed scores using SHAP values (feature-level decomposition).
@@ -654,6 +644,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             pdo: Points to Double the Odds
             target_points: Target score for reference odds
             target_odds: Reference odds ratio
+            intercept_based: If True, distribute intercept and offset across features (default: True)
 
         Returns:
             DataFrame with feature-level score contributions and total score
@@ -678,6 +669,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             base_value=base_value,
             feature_names=X.columns.tolist(),
             scorecard_dict=scorecard_dict,
+            intercept_based=intercept_based,
         )
 
         # Return DataFrame with feature scores and total score

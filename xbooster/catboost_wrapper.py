@@ -2,6 +2,12 @@
 catboost_wrapper.py
 
 This module implements the inference functionality for CatBoost models.
+
+Author: Denis Burakov
+Github: @deburky
+License: MIT
+This code is licensed under the MIT License.
+Copyright (c) 2025 xRiskLab
 """
 
 import re

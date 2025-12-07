@@ -1,6 +1,6 @@
 """
-CatBoost Scorecard Constructor
-=================================
+cb_constructor.py
+
 This module provides a high-level interface for working with CatBoost scorecards.
 It combines the functionality of CatBoostScorecard and CatBoostWOEMapper to provide
 a streamlined workflow for creating and using scorecards.
@@ -9,7 +9,7 @@ Author: Denis Burakov
 Github: @deburky
 License: MIT
 This code is licensed under the MIT License.
-Copyright (c) 2025 Denis Burakov
+Copyright (c) 2025 xRiskLab
 """
 
 from typing import Any, Dict, Optional, Union
@@ -121,9 +121,12 @@ class CatBoostScorecardConstructor:
             raise ValueError("Model not set. Call fit() first.")
         return CatBoostScorecard.extract_leaf_weights(self.model)
 
-    def construct_scorecard(self) -> pd.DataFrame:
+    def construct_scorecard(self, shap: bool = False) -> pd.DataFrame:
         """
         Construct a scorecard from the model and pool.
+
+        Args:
+            shap: If True, add average SHAP values per leaf to the scorecard
 
         Returns:
             DataFrame containing the scorecard information
@@ -132,6 +135,10 @@ class CatBoostScorecardConstructor:
             self._build_scorecard()
 
         scorecard = self.scorecard_df.copy()
+
+        # Add average SHAP values per leaf if requested
+        if shap:
+            scorecard = self._add_average_shap_to_scorecard(scorecard)
 
         # Extract feature names and split values from DetailedSplit
         for idx, row in scorecard.iterrows():
@@ -179,25 +186,30 @@ class CatBoostScorecardConstructor:
         # Calculate CountPct
         scorecard["CountPct"] = (scorecard["Count"] / total_count).fillna(0.0)
 
-        # Return only the basic columns
-        return scorecard[
-            [
-                "Tree",
-                "LeafIndex",
-                "Feature",
-                "Sign",
-                "Split",
-                "CountPct",
-                "Count",
-                "NonEvents",
-                "Events",
-                "EventRate",
-                "XAddEvidence",
-                "WOE",
-                "IV",
-                "DetailedSplit",
-            ]
+        # Build column list
+        base_columns = [
+            "Tree",
+            "LeafIndex",
+            "Feature",
+            "Sign",
+            "Split",
+            "CountPct",
+            "Count",
+            "NonEvents",
+            "Events",
+            "EventRate",
+            "XAddEvidence",
+            "WOE",
+            "IV",
+            "DetailedSplit",
         ]
+
+        # Add SHAP column if it exists
+        if "SHAP" in scorecard.columns:
+            base_columns.append("SHAP")
+
+        # Return only the basic columns
+        return scorecard[base_columns]
 
     def get_scorecard(self) -> pd.DataFrame:
         """
@@ -209,6 +221,119 @@ class CatBoostScorecardConstructor:
         if self.scorecard_df is None:
             raise ValueError("Scorecard not built yet. Call fit() first.")
         return self.scorecard_df
+
+    def _add_average_shap_to_scorecard(self, scorecard: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add average SHAP values per leaf to the scorecard.
+
+        Since observations in the same leaf have the same SHAP values (within numerical precision),
+        we compute the average SHAP value for each (Tree, LeafIndex) combination.
+
+        Note: SHAP represents only the sum of feature contributions, WITHOUT the base score.
+        This makes it comparable to XAddEvidence which also represents feature contributions only.
+
+        Args:
+            scorecard: The scorecard DataFrame
+
+        Returns:
+            Scorecard with SHAP column added (feature contributions only, base score excluded)
+        """
+        if self.model is None or self.pool is None:
+            return scorecard
+
+        try:
+            # Extract SHAP values for training data
+            shap_values_full = extract_shap_values_cb(self.model, self.pool)
+            shap_values = shap_values_full[
+                :, :-1
+            ]  # Feature contributions only (excludes base score column)
+            # Sum of feature contributions only - base score is NOT included
+            total_shap = shap_values.sum(axis=1)
+
+            # Get training data as DataFrame
+            X_train = self.pool.get_features()
+            feature_names = (
+                self.pool.get_feature_names() if hasattr(self.pool, "get_feature_names") else None
+            )
+            if feature_names is None:
+                feature_names = [f"feature_{i}" for i in range(X_train.shape[1])]
+            X_train_df = pd.DataFrame(X_train, columns=feature_names)
+
+            # Initialize SHAP column
+            scorecard["SHAP"] = np.nan
+
+            # For each (Tree, LeafIndex) combination, find observations and compute average SHAP
+            for tree_idx in scorecard["Tree"].unique():
+                tree_scorecard = scorecard[scorecard["Tree"] == tree_idx].copy()
+
+                for _, leaf_row in tree_scorecard.iterrows():
+                    leaf_idx = leaf_row["LeafIndex"]
+                    detailed_split = leaf_row.get("DetailedSplit")
+
+                    if pd.isna(detailed_split) or not isinstance(detailed_split, str):
+                        continue
+
+                    # Create a mask for observations matching this leaf's conditions
+                    mask = pd.Series([True] * len(X_train_df))
+
+                    # Apply all conditions from DetailedSplit
+                    for condition in detailed_split.split(" AND "):
+                        condition = condition.strip()
+                        if " <= " in condition:
+                            feature, value = condition.split(" <= ")
+                            feature = feature.strip()
+                            value = float(value.strip())
+                            if feature in X_train_df.columns:
+                                mask = mask & (X_train_df[feature] <= value)
+                        elif " > " in condition:
+                            feature, value = condition.split(" > ")
+                            feature = feature.strip()
+                            value = float(value.strip())
+                            if feature in X_train_df.columns:
+                                mask = mask & (X_train_df[feature] > value)
+                        elif " = " in condition:
+                            feature, value = condition.split(" = ")
+                            feature = feature.strip()
+                            value = value.strip().strip("'\"")
+                            if feature in X_train_df.columns:
+                                # Try numeric comparison first
+                                try:
+                                    value_float = float(value)
+                                    mask = mask & (X_train_df[feature] == value_float)
+                                except ValueError:
+                                    mask = mask & (X_train_df[feature].astype(str) == value)
+                        elif " != " in condition:
+                            feature, value = condition.split(" != ")
+                            feature = feature.strip()
+                            value = value.strip().strip("'\"")
+                            if feature in X_train_df.columns:
+                                try:
+                                    value_float = float(value)
+                                    mask = mask & (X_train_df[feature] != value_float)
+                                except ValueError:
+                                    mask = mask & (X_train_df[feature].astype(str) != value)
+
+                    # Compute average SHAP for observations in this leaf
+                    if mask.any():
+                        leaf_shap_values = total_shap[mask.values]
+                        avg_shap = np.mean(leaf_shap_values)
+
+                        # Update scorecard
+                        scorecard.loc[
+                            (scorecard["Tree"] == tree_idx) & (scorecard["LeafIndex"] == leaf_idx),
+                            "SHAP",
+                        ] = avg_shap
+
+            return scorecard
+
+        except Exception as e:
+            # If SHAP extraction fails, return scorecard without SHAP column
+            import warnings
+
+            warnings.warn(
+                f"Failed to add SHAP values to scorecard: {e}. Returning scorecard without SHAP."
+            )
+            return scorecard
 
     def get_feature_importance(self) -> Dict[str, float]:
         """
@@ -532,6 +657,7 @@ class CatBoostScorecardConstructor:
         pdo: float = 50,
         target_points: float = 600,
         target_odds: float = 19,
+        intercept_based: bool = True,
     ) -> pd.DataFrame:
         """
         Predict decomposed scores for a given dataset.
@@ -544,6 +670,7 @@ class CatBoostScorecardConstructor:
             pdo: Points to Double the Odds (only used for method='shap')
             target_points: Target score for reference odds (only used for method='shap')
             target_odds: Reference odds ratio (only used for method='shap')
+            intercept_based: If True, distribute intercept and offset across features (default: True)
 
         Returns:
             DataFrame with decomposed scores (tree-level for default, feature-level for SHAP)
@@ -554,7 +681,9 @@ class CatBoostScorecardConstructor:
                 pdo = self.pdo_params.get("pdo", pdo)
                 target_points = self.pdo_params.get("target_points", target_points)
                 target_odds = self.pdo_params.get("target_odds", target_odds)
-            return self._predict_scores_shap(features, pdo, target_points, target_odds)
+            return self._predict_scores_shap(
+                features, pdo, target_points, target_odds, intercept_based
+            )
 
         # Default: use traditional scorecard-based approach (tree-level decomposition)
         if self.mapper is None:
@@ -582,6 +711,7 @@ class CatBoostScorecardConstructor:
         pdo: float = 50,
         target_points: float = 600,
         target_odds: float = 19,
+        intercept_based: bool = True,
     ) -> pd.DataFrame:
         """
         Predict decomposed scores using SHAP values (feature-level decomposition).
@@ -591,6 +721,7 @@ class CatBoostScorecardConstructor:
             pdo: Points to Double the Odds
             target_points: Target score for reference odds
             target_odds: Reference odds ratio
+            intercept_based: If True, distribute intercept and offset across features (default: True)
 
         Returns:
             DataFrame with feature-level score contributions and total score
@@ -628,6 +759,7 @@ class CatBoostScorecardConstructor:
             base_value=base_value,
             feature_names=features_df.columns.tolist(),
             scorecard_dict=scorecard_dict,
+            intercept_based=intercept_based,
         )
 
         # Return DataFrame with feature scores and total score

@@ -1,7 +1,7 @@
 # xbooster 🚀
 
 <div align="center">
-  <img src="examples/ims/xbooster.png" alt="xbooster" width="600"/>
+  <img src="examples/ims/xbooster.png" alt="xbooster" width="800"/>
 </div>
 
 <div align="center">
@@ -191,6 +191,26 @@ traditional_scores = scorecard_constructor.predict_score(X_test)  # Default meth
 - Values are automatically scaled using PDO (Points to Double the Odds) formula
 - No need to call `create_points()` first - SHAP scoring works independently
 - SHAP values are **not** stored in the scorecard binning table (computed only when needed)
+
+**Intercept and Offset Distribution:**
+
+By default, xbooster distributes the intercept (base value) and offset across all features when computing feature-level scores, matching the behavior of SAS scorecard modeling. This ensures that:
+
+1. Each feature score includes its proportional share of the intercept and offset
+2. The sum of all feature scores equals the total score (accounting for rounding)
+3. The decomposition is consistent with industry-standard scorecard practices
+
+This approach follows the SAS Enterprise Miner methodology for scorecard construction, where the base score is distributed across features rather than applied as a single constant. For more details, see the [SAS Enterprise Miner documentation](https://documentation.sas.com/doc/en/emref/15.4/n181vl3wdwn89mn1pfpqm3w6oaz5.htm).
+
+You can control this behavior using the `intercept_based` parameter:
+
+```python
+# Default: distribute intercept and offset across features (SAS-like behavior)
+shap_decomposed = scorecard_constructor.predict_scores(X_test, method="shap", intercept_based=True)
+
+# Alternative: apply intercept and offset once to the total score
+shap_decomposed = scorecard_constructor.predict_scores(X_test, method="shap", intercept_based=False)
+```
 
 **Example with all three libraries:**
 

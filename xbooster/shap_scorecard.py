@@ -1,9 +1,15 @@
 """
-SHAP-based scorecard computation.
+shap_scorecard.py
 
 This module provides functions for computing scores directly from SHAP values
 without using pre-computed binned scorecards. This is useful for models with
 max_depth > 1 where interpretability is challenging.
+
+Author: Denis Burakov
+Github: @deburky
+License: MIT
+This code is licensed under the MIT License.
+Copyright (c) 2025 xRiskLab
 """
 
 from typing import Dict, Optional
@@ -36,39 +42,70 @@ def compute_shap_scores(
     base_value: Optional[float] = None,
     scorecard_dict: Optional[Dict[str, float]] = None,
     feature_names: Optional[list] = None,
+    intercept_based: bool = True,
 ) -> pd.DataFrame:
     """
     Convert SHAP values into a scorecard-like system.
 
-    This function computes scores directly from SHAP values without using
-    pre-computed binned scorecards. The approach is different from XAddEvidence-based
-    scorecards which rely on binning tables.
+    This function computes feature-level scores from SHAP values and maps them to a
+    traditional scorecard scale (PDO, target points, target odds). It supports two
+    scoring modes:
 
-    Parameters:
-    -----------
-    model: Trained ML model (optional, if shap_values and base_value are provided)
-    X: Input dataset (required if model is provided)
-    y: Target variable (optional, used to estimate base_score if not provided)
-    shap_values: Precomputed SHAP values array of shape (n_samples, n_features)
-    base_value: Base log-odds score (expected value). If None, will be estimated.
-    scorecard_dict: Config for score scaling (PDO, target points, target odds)
-    feature_names: List of feature names (required if shap_values is provided)
+    1. Standard mode (intercept_based=False):
+    - Feature scores are based only on SHAP values.
+    - The intercept is subtracted once from the total score.
+    - Feature scores DO NOT sum to the final score.
 
-    Returns:
-    --------
-    pd.DataFrame: Scorecard with feature-wise contributions and final score.
-        Columns: {feature}_score for each feature, and 'score' for final score.
+    2. Intercept-based mode (intercept_based=True):
+    - The intercept and offset are distributed evenly across all features.
+    - Each feature score includes:
+            * a scaled SHAP contribution
+            * an equal share of the intercept term
+            * an equal share of the offset
+    - Feature scores sum exactly to the final score (SAS-style behavior).
 
-    Example:
-    --------
+    Parameters
+    ----------
+    model : Trained model (optional if shap_values and base_value are provided)
+    X : pd.DataFrame, optional
+        Input dataset. Required only if model is directly used.
+    y : pd.Series, optional
+        Target variable (only used if base_value is not provided).
+    shap_values : np.ndarray, optional
+        SHAP values of shape (n_samples, n_features).
+    base_value : float, optional
+        SHAP expected value (log-odds). Required for correct scaling.
+    scorecard_dict : dict, optional
+        Dictionary containing scoring scale parameters:
+            - "pdo": points to double the odds (default=50)
+            - "target_points": reference score (default=600)
+            - "target_odds": reference odds (default=19)
+    feature_names : list of str
+        Names of features corresponding to columns in shap_values.
+    intercept_based : bool, default=False
+        Whether to distribute intercept and offset across features.
+        If True, feature scores sum to the final total score (SAS-style).
+        If False, intercept is applied once and feature scores will not sum.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame containing:
+            - {feature}_score columns for each feature
+            - "score" column representing the total score
+
+    Example
+    -------
     >>> shap_values, base_value = extract_shap_values(model, X)
     >>> scorecard = compute_shap_scores(
     ...     shap_values=shap_values,
     ...     base_value=base_value,
     ...     feature_names=X.columns,
+    ...     intercept_based=True,
     ...     scorecard_dict={"pdo": 50, "target_points": 600, "target_odds": 19},
     ... )
     """
+
     if scorecard_dict is None:
         scorecard_dict = {
             "pdo": 50,
@@ -106,19 +143,46 @@ def compute_shap_scores(
     # Scale the intercept by factor (as per user requirement)
     intercept_scaled = factor * intercept_
 
-    # Compute feature-level scores: factor * -shap_value
-    # Note: We negate SHAP values because higher SHAP (more positive) should reduce score
-    # All libraries (XGBoost, LightGBM, CatBoost) use the same sign convention
     scorecard_df = pd.DataFrame()
-    for feature in shap_df.columns:
-        scorecard_df[f"{feature}_score"] = factor * (-shap_df[feature])
 
-    # Compute final score by summing feature-level scores, subtracting scaled intercept once, and adding offset
-    # Formula: factor * sum(-shap) - factor * intercept + offset
-    scorecard_df["score"] = scorecard_df.sum(axis=1) - intercept_scaled + offset
+    if intercept_based:
+        # Distribute intercept and offset across features (matches SAS behavior)
+        n_features = len(shap_df.columns)
 
-    # Return as integers (not floats) to avoid .0 display
-    return scorecard_df.round(0).astype(int)
+        # Distribute both intercept and offset
+        intercept_contribution = (-intercept_scaled) / n_features
+        offset_contribution = offset / n_features
+
+        # Build list of feature score column names before creating them
+        feature_score_cols = [f"{feature}_score" for feature in shap_df.columns]
+
+        for feature in shap_df.columns:
+            scorecard_df[f"{feature}_score"] = (
+                factor * (-shap_df[feature]) + intercept_contribution + offset_contribution
+            )
+
+        # Round feature scores first, then sum to ensure total matches sum of rounded features
+        scorecard_df[feature_score_cols] = scorecard_df[feature_score_cols].round(0).astype(int)
+
+        # Total score is the sum of rounded feature scores (matches SAS behavior)
+        # Explicitly sum only the feature score columns to ensure accuracy
+        scorecard_df["score"] = scorecard_df[feature_score_cols].sum(axis=1).astype(int)
+    else:
+        # Original behavior: compute feature-level scores without distributing intercept/offset
+        # Compute feature-level scores: factor * -shap_value
+        # Note: We negate SHAP values because higher SHAP (more positive) should reduce score
+        # All libraries (XGBoost, LightGBM, CatBoost) use the same sign convention
+        for feature in shap_df.columns:
+            scorecard_df[f"{feature}_score"] = factor * (-shap_df[feature])
+
+        # Compute final score by summing feature-level scores, subtracting scaled intercept once, and adding offset
+        # Formula: factor * sum(-shap) - factor * intercept + offset
+        scorecard_df["score"] = scorecard_df.sum(axis=1) - intercept_scaled + offset
+
+        # Return as integers (not floats) to avoid .0 display
+        scorecard_df = scorecard_df.round(0).astype(int)
+
+    return scorecard_df
 
 
 def compute_shap_scores_decomposed(

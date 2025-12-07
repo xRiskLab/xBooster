@@ -291,13 +291,17 @@ def test_construct_scorecard(scorecard_constructor):  # pylint: disable=W0621
     scorecard = scorecard_constructor.construct_scorecard()
     assert isinstance(scorecard, pd.DataFrame)
     assert not scorecard.empty
-    # Verify SHAP column exists (Alpha feature)
-    assert "SHAP" in scorecard.columns
+    # Verify SHAP column exists only when shap=True
+    assert "SHAP" not in scorecard.columns
+
+    # Test with shap=True
+    scorecard_with_shap = scorecard_constructor.construct_scorecard(shap=True)
+    assert "SHAP" in scorecard_with_shap.columns
 
 
 def test_shap_integration(scorecard_constructor):  # pylint: disable=W0621
     """
-    Test SHAP integration in XGBScorecardConstructor (Alpha feature).
+    Test SHAP integration in XGBScorecardConstructor.
 
     Parameters:
     - scorecard_constructor: An instance of the XGBScorecardConstructor class.
@@ -308,22 +312,96 @@ def test_shap_integration(scorecard_constructor):  # pylint: disable=W0621
     Raises:
     - AssertionError: If SHAP integration doesn't work correctly.
     """
-    # Test extract_shap_values method
-    X = scorecard_constructor.X  # pylint: disable=C0103
-    shap_values = scorecard_constructor.extract_shap_values(X)
-    assert shap_values.shape[0] == X.shape[0]  # Same number of samples
-    assert shap_values.shape[1] == X.shape[1] + 1  # Features + base_score
+    from xbooster.shap_scorecard import extract_shap_values_xgb
 
-    # Test construct_scorecard includes SHAP column
-    scorecard = scorecard_constructor.construct_scorecard()
+    # Test extract_shap_values from shap_scorecard module
+    X = scorecard_constructor.X  # pylint: disable=C0103
+    shap_values = extract_shap_values_xgb(
+        scorecard_constructor.model,
+        X,
+        scorecard_constructor.base_score,
+        scorecard_constructor.enable_categorical,
+    )
+    assert shap_values.shape[0] == X.shape[0]  # Same number of samples
+    assert shap_values.shape[1] == X.shape[1] + 1  # Features + base_value
+
+    # Test construct_scorecard with shap=True includes SHAP column
+    scorecard = scorecard_constructor.construct_scorecard(shap=True)
     assert "SHAP" in scorecard.columns
     assert scorecard["SHAP"].dtype in [float, "float64"]
 
-    # Test create_points with SHAP score_type
-    points_shap = scorecard_constructor.create_points(score_type="SHAP")
-    assert isinstance(points_shap, pd.DataFrame)
-    assert not points_shap.empty
-    assert "Points" in points_shap.columns
+    # Test predict_score with method="shap"
+    scorecard_constructor.create_points()
+    shap_score = scorecard_constructor.predict_score(X, method="shap")
+    assert isinstance(shap_score, pd.Series)
+    assert len(shap_score) == len(X)
+
+
+def test_shap_table_equivalence(scorecard_constructor):  # pylint: disable=W0621
+    """
+    Test that SHAP values from the scorecard table match feature SHAP values.
+
+    This verifies that:
+    1. SHAP column contains per-tree margin contributions
+    2. Sum of table SHAP across trees equals sum of feature SHAP
+    3. Scores derived from both methods match
+    """
+    import numpy as np
+    from xbooster.shap_scorecard import extract_shap_values_xgb
+
+    X = scorecard_constructor.X  # pylint: disable=C0103
+
+    # Build scorecard with SHAP column
+    scorecard = scorecard_constructor.construct_scorecard(shap=True)
+    assert "SHAP" in scorecard.columns
+
+    # Get feature SHAP values
+    shap_values_full = extract_shap_values_xgb(
+        scorecard_constructor.model,
+        X.head(10),
+        scorecard_constructor.base_score,
+        scorecard_constructor.enable_categorical,
+    )
+    feature_shap_sum = shap_values_full[:, :-1].sum(axis=1)  # Sum across features
+    shap_base_value = shap_values_full[0, -1]
+
+    # Get leaf indices for test observations
+    leaf_indices = scorecard_constructor.get_leafs(X.head(10), output_type="leaf_index")
+    n_trees = len(scorecard["Tree"].unique())
+
+    # Sum SHAP from table across all trees
+    table_shap_sum = []
+    for idx in range(10):
+        obs_leafs = leaf_indices.iloc[idx]
+        total_shap = 0.0
+        for tree_idx in range(n_trees):
+            node_idx = obs_leafs.iloc[tree_idx]
+            row = scorecard[(scorecard["Tree"] == tree_idx) & (scorecard["Node"] == node_idx)]
+            if not row.empty:
+                total_shap += row["SHAP"].iloc[0]
+        table_shap_sum.append(total_shap)
+    table_shap_sum = np.array(table_shap_sum)
+
+    # Verify that table SHAP sum equals feature SHAP sum
+    assert np.allclose(table_shap_sum, feature_shap_sum, atol=1e-4), (
+        f"Table SHAP sum should equal Feature SHAP sum. "
+        f"Max diff: {np.abs(table_shap_sum - feature_shap_sum).max()}"
+    )
+
+    # Verify scores match when using same scaling approach
+    pdo, target_points, target_odds = 50, 600, 19
+    factor = pdo / np.log(2)
+    offset = target_points - factor * np.log(target_odds)
+    intercept_scaled = factor * shap_base_value
+
+    scores_from_table = np.round(factor * (-table_shap_sum) - intercept_scaled + offset).astype(int)
+    scores_from_feature = np.round(factor * (-feature_shap_sum) - intercept_scaled + offset).astype(
+        int
+    )
+
+    assert np.array_equal(scores_from_table, scores_from_feature), (
+        "Scores from table SHAP should match scores from feature SHAP"
+    )
 
 
 def test_create_points(scorecard_constructor):  # pylint: disable=W0621

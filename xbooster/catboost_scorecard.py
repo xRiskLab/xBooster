@@ -1,6 +1,6 @@
 """
-CatBoost Scorecard Script
-=================================
+catboost_scorecard.py
+
 This module provides functionality to extract data for scorecards from CatBoost models.
 It handles both numerical and categorical features with one-hot encoding approach.
 
@@ -8,7 +8,7 @@ Author: Denis Burakov
 Github: @deburky
 License: MIT
 This code is licensed under the MIT License.
-Copyright (c) 2025 Denis Burakov
+Copyright (c) 2025 xRiskLab
 
 """
 

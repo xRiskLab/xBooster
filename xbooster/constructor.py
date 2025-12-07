@@ -1,6 +1,14 @@
 """
+constructor.py
+
 Unified interface for importing scorecard constructors.
 This module provides access to both XGBoost and CatBoost scorecard constructors.
+
+Authors: Denis Burakov
+Github: @deburky
+License: MIT
+This code is licensed under the MIT License.
+Copyright (c) 2025 xRiskLab
 """
 
 from typing import Any, Dict, Optional, Protocol, Union
