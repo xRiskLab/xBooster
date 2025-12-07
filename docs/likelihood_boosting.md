@@ -1,59 +1,6 @@
----
-title: "The Likelihoodist Interpretation of Gradient Boosting"
-author: "Denis Burakov"
-date: "November 2023"
-geometry: "margin=1in"
-fontsize: 12pt
-colorlinks: true
-linkcolor: blue
-urlcolor: blue
-toccolor: blue
-header-includes:
-  - \usepackage{titling}
-  - \pretitle{\begin{center}\LARGE}
-  - \posttitle{\end{center}}
-  - \preauthor{\begin{center}\Large}
-  - \postauthor{\end{center}}
-  - \predate{\begin{center}\large}
-  - \postdate{\end{center}}
-  - \usepackage{listings}
-  - \usepackage{xcolor}
-  - \usepackage{fontspec}
-  - \setmonofont{Menlo}
-  - \lstset{
-      basicstyle=\ttfamily\small,
-      keywordstyle=\color{blue},
-      commentstyle=\color{green!60!black},
-      stringstyle=\color{red},
-      showstringspaces=false,
-      breaklines=true,
-      frame=single,
-      numbers=left,
-      numberstyle=\tiny\ttfamily,
-      numbersep=5pt
-    }
-  - \usepackage{graphicx}
-  - \usepackage[most]{tcolorbox}
-  - \usepackage{mdframed}
-  - \usepackage{needspace}
-  - \setlength{\parskip}{6pt plus 2pt minus 1pt}
-  - \setlength{\parindent}{0pt}
-  - \definecolor{infoboxbackground}{RGB}{240, 247, 255}
-  - \definecolor{infoboxborder}{RGB}{187, 222, 251}
-  - \definecolor{featureboxbackground}{RGB}{240, 247, 255}
-  - \definecolor{featureboxborder}{RGB}{66, 133, 244}
-  - \definecolor{warningboxbackground}{RGB}{255, 243, 205}
-  - \definecolor{warningboxborder}{RGB}{243, 156, 18}
-  - \definecolor{theoremboxbackground}{RGB}{232, 245, 232}
-  - \definecolor{theoremboxborder}{RGB}{165, 214, 167}
-  - \definecolor{definitionboxbackground}{RGB}{255, 249, 230}
-  - \definecolor{definitionboxborder}{RGB}{255, 217, 102}
-  - \newmdenv[backgroundcolor=theoremboxbackground,linecolor=theoremboxborder,linewidth=2pt,roundcorner=5pt,innerleftmargin=15pt,innerrightmargin=15pt,innertopmargin=15pt,innerbottommargin=15pt,skipabove=15pt,skipbelow=15pt,leftmargin=0pt,rightmargin=0pt]{theorembox}
-  - \newmdenv[backgroundcolor=featureboxbackground,linecolor=featureboxborder,linewidth=2pt,roundcorner=5pt,innerleftmargin=15pt,innerrightmargin=15pt,innertopmargin=15pt,innerbottommargin=15pt,skipabove=15pt,skipbelow=15pt,leftmargin=0pt,rightmargin=0pt]{featurebox}
-  - \newmdenv[backgroundcolor=warningboxbackground,linecolor=warningboxborder,leftline=true,rightline=false,topline=false,bottomline=false,linewidth=2pt,innerleftmargin=20pt,innerrightmargin=15pt,innertopmargin=15pt,innerbottommargin=15pt,skipabove=15pt,skipbelow=15pt,leftmargin=0pt,rightmargin=0pt]{warningbox}
----
-
 # The Likelihoodist Interpretation of Gradient Boosting
+
+> **Author:** Denis Burakov | **Date:** November 2023
 
 This document explores a likelihood-based perspective on gradient boosting machines, conceptualizing tree margins as additive evidence in favor of an event hypothesis.
 
@@ -108,11 +55,11 @@ This converts the log-odds ratio back to a probability ratio, representing how m
 A gradient boosted tree ensemble produces a prediction as a sum of margins:
 
 $$
-\text{margin}(x) = \text{base\_score} + \sum_{t=1}^{T} w_t(x)
+\text{margin}(x) = b_0 + \sum_{t=1}^{T} w_t(x)
 $$
 
 where:
-- $\text{base\_score}$ is the initial log-odds (prior)
+- $b_0$ is the base score (initial log-odds / prior)
 - $w_t(x)$ is the leaf weight from tree $t$ for observation $x$
 - $T$ is the number of trees
 
@@ -322,21 +269,25 @@ Both approaches are complementary: the likelihoodist view excels at understandin
 ### 8.1 Key Formulas
 
 **Weight of Evidence:**
+
 $$
-\text{WOE} = \ln\left(\frac{P(\text{Event}|\text{Split}) / P(\text{Non-Event}|\text{Split})}{P(\text{Event}) / P(\text{Non-Event})}\right)
+\text{WOE} = \ln\left(\frac{P(\text{Event}|\text{Split}) / P(\text{NonEvent}|\text{Split})}{P(\text{Event}) / P(\text{NonEvent})}\right)
 $$
 
 **Likelihood:**
+
 $$
 \mathcal{L} = e^{\text{WOE}}
 $$
 
 **Gradient Boosting Prediction:**
+
 $$
-\text{margin}(x) = \text{base\_score} + \sum_{t=1}^{T} w_t(x)
+\text{margin}(x) = b_0 + \sum_{t=1}^{T} w_t(x)
 $$
 
 **Likelihood Ratio:**
+
 $$
 \text{LR} = \frac{\mathcal{L}_{\text{leaf}}}{\mathcal{L}_{\text{split}}} = e^{\text{WOE}_{\text{split}} - \text{WOE}_{\text{leaf}}}
 $$

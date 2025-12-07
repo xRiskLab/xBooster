@@ -1,59 +1,6 @@
----
-title: "SHAP Scorecards"
-author: "Denis Burakov"
-date: "December 2025"
-geometry: "margin=1in"
-fontsize: 12pt
-colorlinks: true
-linkcolor: blue
-urlcolor: blue
-toccolor: blue
-header-includes:
-  - \usepackage{titling}
-  - \pretitle{\begin{center}\LARGE}
-  - \posttitle{\end{center}}
-  - \preauthor{\begin{center}\Large}
-  - \postauthor{\end{center}}
-  - \predate{\begin{center}\large}
-  - \postdate{\end{center}}
-  - \usepackage{listings}
-  - \usepackage{xcolor}
-  - \usepackage{fontspec}
-  - \setmonofont{Menlo}
-  - \lstset{
-      basicstyle=\ttfamily\small,
-      keywordstyle=\color{blue},
-      commentstyle=\color{green!60!black},
-      stringstyle=\color{red},
-      showstringspaces=false,
-      breaklines=true,
-      frame=single,
-      numbers=left,
-      numberstyle=\tiny\ttfamily,
-      numbersep=5pt
-    }
-  - \usepackage{graphicx}
-  - \usepackage[most]{tcolorbox}
-  - \usepackage{mdframed}
-  - \usepackage{needspace}
-  - \setlength{\parskip}{6pt plus 2pt minus 1pt}
-  - \setlength{\parindent}{0pt}
-  - \definecolor{infoboxbackground}{RGB}{240, 247, 255}
-  - \definecolor{infoboxborder}{RGB}{187, 222, 251}
-  - \definecolor{featureboxbackground}{RGB}{240, 247, 255}
-  - \definecolor{featureboxborder}{RGB}{66, 133, 244}
-  - \definecolor{warningboxbackground}{RGB}{255, 243, 205}
-  - \definecolor{warningboxborder}{RGB}{243, 156, 18}
-  - \definecolor{theoremboxbackground}{RGB}{232, 245, 232}
-  - \definecolor{theoremboxborder}{RGB}{165, 214, 167}
-  - \definecolor{definitionboxbackground}{RGB}{255, 249, 230}
-  - \definecolor{definitionboxborder}{RGB}{255, 217, 102}
-  - \newmdenv[backgroundcolor=theoremboxbackground,linecolor=theoremboxborder,linewidth=2pt,roundcorner=5pt,innerleftmargin=15pt,innerrightmargin=15pt,innertopmargin=15pt,innerbottommargin=15pt,skipabove=15pt,skipbelow=15pt,leftmargin=0pt,rightmargin=0pt]{theorembox}
-  - \newmdenv[backgroundcolor=featureboxbackground,linecolor=featureboxborder,linewidth=2pt,roundcorner=5pt,innerleftmargin=15pt,innerrightmargin=15pt,innertopmargin=15pt,innerbottommargin=15pt,skipabove=15pt,skipbelow=15pt,leftmargin=0pt,rightmargin=0pt]{featurebox}
-  - \newmdenv[backgroundcolor=warningboxbackground,linecolor=warningboxborder,leftline=true,rightline=false,topline=false,bottomline=false,linewidth=2pt,innerleftmargin=20pt,innerrightmargin=15pt,innertopmargin=15pt,innerbottommargin=15pt,skipabove=15pt,skipbelow=15pt,leftmargin=0pt,rightmargin=0pt]{warningbox}
----
-
 # SHAP Scorecards
+
+> **Author:** Denis Burakov | **Date:** December 2025
 
 This document explains how xBooster uses TreeSHAP to create scorecards for gradient-boosted trees, and the mathematical relationship between feature-based SHAP decomposition and tree-based margin decomposition.
 
@@ -172,16 +119,16 @@ There's a subtle difference between the base values used in different decomposit
 - **Constructor base_score**: The model's initial prediction (prior log-odds)
 - **SHAP base_value**: TreeSHAP's expected value ($\phi_0$)
 
-These can differ slightly. To ensure consistency:
+These can differ slightly. To ensure consistency, we adjust the table SHAP:
 
 $$
-\text{SHAP}_{\text{table}}^{(t)} = w_t + \frac{\text{base\_score} - \phi_0}{T}
+\text{SHAP}^{(t)} = w_t + \frac{\text{base score} - \phi_0}{T}
 $$
 
 This adjustment distributes the base value difference across all trees, ensuring:
 
 $$
-\sum_{t=1}^{T} \text{SHAP}_{\text{table}}^{(t)} = \sum_{j=1}^{p} \phi_j
+\sum_{t=1}^{T} \text{SHAP}^{(t)} = \sum_{j=1}^{p} \phi_j
 $$
 
 ### 2.4 Computing Scores from the Table

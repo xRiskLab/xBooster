@@ -1,7 +1,7 @@
 # xbooster 🚀
 
 <div align="center">
-  <img src="examples/ims/xbooster.png" alt="xbooster" width="800"/>
+  <img src="examples/ims/xbooster.png" alt="xbooster" width="600"/>
 </div>
 
 <div align="center">
