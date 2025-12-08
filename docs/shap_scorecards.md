@@ -85,50 +85,50 @@ total_score = sum(feature_scores)
 
 The `predict_scores(method="shap")` method returns the decomposed scores per feature, allowing interpretability at the feature level.
 
-## 2. SHAP from the Scorecard Table
+## 2. XAddEvidence: Per-Tree Margin Contributions
 
 ### 2.1 Tree-Based Margin Decomposition
 
 An alternative decomposition is by tree rather than by feature. For an ensemble of $T$ trees:
 
 $$
-\text{margin}(x) = \phi_0 + \sum_{t=1}^{T} w_t(x)
+\text{margin}(x) = b_0 + \sum_{t=1}^{T} w_t(x)
 $$
 
 where $w_t(x)$ is the leaf weight (margin contribution) from tree $t$ for observation $x$.
 
 **Key property**: All observations that fall into the same leaf of tree $t$ receive the same contribution $w_t$. This makes the per-tree contribution deterministic per leaf.
 
-### 2.2 Storing SHAP in the Scorecard Table
+### 2.2 XAddEvidence in the Scorecard Table
 
-When `construct_scorecard(shap=True)` is called, the scorecard table includes a SHAP column that stores the per-tree margin contribution for each (Tree, Node) combination:
+The scorecard table includes an `XAddEvidence` column that stores the per-tree margin contribution for each (Tree, Node) combination:
 
-| Tree | Node | Feature | Split | SHAP |
-|------|------|---------|-------|------|
+| Tree | Node | Feature | Split | XAddEvidence |
+|------|------|---------|-------|--------------|
 | 0 | 4 | debt_ratio | >= 0.47 | 0.456 |
 | 0 | 6 | age | >= 30 | -0.119 |
 | ... | ... | ... | ... | ... |
 
-The SHAP value for each leaf is:
+The XAddEvidence value for each leaf is:
 - **Deterministic**: All observations in the same leaf get the same value
 - **Additive**: Summing across all trees gives the total margin contribution
 
 ### 2.3 Base Value Adjustment
 
-There's a subtle difference between the base values used in different decompositions:
-- **Constructor base_score**: The model's initial prediction (prior log-odds)
-- **SHAP base_value**: TreeSHAP's expected value ($\phi_0$)
+There's a subtle difference between the base values:
+- **Constructor base_score** ($b_0$): The model's initial prediction (prior log-odds)
+- **SHAP base_value** ($\phi_0$): TreeSHAP's expected value
 
-These can differ slightly. To ensure consistency, we adjust the table SHAP:
-
-$$
-\text{SHAP}^{(t)} = w_t + \frac{\text{base score} - \phi_0}{T}
-$$
-
-This adjustment distributes the base value difference across all trees, ensuring:
+To relate XAddEvidence to feature SHAP values, apply an adjustment:
 
 $$
-\sum_{t=1}^{T} \text{SHAP}^{(t)} = \sum_{j=1}^{p} \phi_j
+w_t^{\text{adj}} = w_t + \frac{b_0 - \phi_0}{T}
+$$
+
+This distributes the base value difference across all trees, ensuring:
+
+$$
+\sum_{t=1}^{T} w_t^{\text{adj}} = \sum_{j=1}^{p} \phi_j
 $$
 
 ### 2.4 Computing Scores from the Table
@@ -136,19 +136,22 @@ $$
 To compute a score for observation $x$ using the table:
 
 1. **Find leaf indices**: For each tree $t$, determine which leaf $x$ falls into
-2. **Sum SHAP values**: $\text{margin}_x = \sum_{t=1}^{T} \text{SHAP}_{\text{table}}^{(t)}$
+2. **Sum XAddEvidence**: $\text{margin}_x = \sum_{t=1}^{T} w_t + (b_0 - \phi_0)$
 3. **Apply PDO scaling**: $\text{Score} = \text{Factor} \times (-\text{margin}_x) - \text{Intercept}_{\text{scaled}} + \text{Offset}$
 4. **Round**: $\text{Score} = \text{round}(\text{Score})$
 
 ```python
-# Sum SHAP from table across all trees
-total_shap = 0
+# Sum XAddEvidence from table across all trees
+total_margin = 0
 for tree_idx in range(n_trees):
     node_idx = get_leaf_index(x, tree_idx)
-    total_shap += scorecard[(Tree == tree_idx) & (Node == node_idx)]["SHAP"]
+    total_margin += scorecard[(Tree == tree_idx) & (Node == node_idx)]["XAddEvidence"]
+
+# Add base value adjustment
+total_margin += (base_score - shap_base_value)
 
 # Apply PDO scaling
-score = factor * (-total_shap) - intercept_scaled + offset
+score = factor * (-total_margin) - intercept_scaled + offset
 score = round(score)
 ```
 
@@ -159,7 +162,7 @@ score = round(score)
 Both methods decompose the same model margin:
 
 $$
-\underbrace{\sum_{j=1}^{p} \phi_j(x)}_{\text{Feature SHAP}} = \underbrace{\sum_{t=1}^{T} w_t^{\text{adj}}(x)}_{\text{Table SHAP}} = \text{margin}(x) - \phi_0
+\underbrace{\sum_{j=1}^{p} \phi_j(x)}_{\text{Feature SHAP}} = \underbrace{\sum_{t=1}^{T} w_t^{\text{adj}}(x)}_{\text{XAddEvidence (adj)}} = \text{margin}(x) - \phi_0
 $$
 
 where $w_t^{\text{adj}}$ includes the base value adjustment.
@@ -185,19 +188,19 @@ The only difference arises from rounding order:
 | Method | Rounding | Result |
 |--------|----------|--------|
 | Feature SHAP (`intercept_based=True`) | Round each feature score, then sum | Integer feature scores that sum exactly |
-| Table SHAP | Sum first, then round once | Single rounded total |
+| XAddEvidence | Sum first, then round once | Single rounded total |
 
 This can cause ±1 point differences, which is acceptable for scorecard applications.
 
 ### 3.4 Summary
 
-| Aspect | Feature SHAP | Table SHAP |
-|--------|--------------|------------|
+| Aspect | Feature SHAP | XAddEvidence |
+|--------|--------------|--------------|
 | Decomposition | By feature | By tree |
 | Deterministic per leaf? | No (varies by observation) | Yes (same for all in leaf) |
 | Interpretability | Per-feature contributions | Per-tree contributions |
 | Storage | Computed on-the-fly | Stored in scorecard table |
-| Scores | Via `predict_score(method="shap")` | Sum SHAP from table, scale |
+| Scores | Via `predict_score(method="shap")` | Sum XAddEvidence + adjustment, scale |
 
 Both methods are mathematically equivalent and produce matching scores when using consistent base values and scaling approaches.
 
@@ -209,24 +212,27 @@ A complete working example demonstrating the equivalence is available in [shap-i
 from xbooster.xgb_constructor import XGBScorecardConstructor
 from xbooster.shap_scorecard import extract_shap_values_xgb
 
-# Build scorecard with SHAP column
+# Build scorecard
 constructor = XGBScorecardConstructor(model, X_train, y_train)
-scorecard = constructor.construct_scorecard(shap=True)
+scorecard = constructor.construct_scorecard()
 
 # Feature SHAP: sum across features
 shap_full = extract_shap_values_xgb(model, X_test, constructor.base_score, False)
 feature_shap_sum = shap_full[:, :-1].sum(axis=1)
+shap_base_value = shap_full[0, -1]
 
-# Table SHAP: sum across trees
+# XAddEvidence: sum across trees with base value adjustment
 leaf_indices = constructor.get_leafs(X_test, output_type="leaf_index")
-table_shap_sum = [
-    sum(scorecard[(scorecard["Tree"] == t) & (scorecard["Node"] == leafs.iloc[t])]["SHAP"].iloc[0]
-        for t in range(n_trees))
+base_adjustment = constructor.base_score - shap_base_value
+
+table_margin_sum = [
+    sum(scorecard[(scorecard["Tree"] == t) & (scorecard["Node"] == leafs.iloc[t])]["XAddEvidence"].iloc[0]
+        for t in range(n_trees)) + base_adjustment
     for leafs in leaf_indices.itertuples(index=False)
 ]
 
 # Both sums are equal → scores match
-assert np.allclose(feature_shap_sum, table_shap_sum)
+assert np.allclose(feature_shap_sum, table_margin_sum)
 ```
 
 Consult the example notebook [shap-in-leaf-weights.ipynb](../examples/shap-in-leaf-weights.ipynb) for a complete working example.

@@ -302,12 +302,9 @@ class XGBScorecardConstructor:
 
         return decision_nodes_df
 
-    def construct_scorecard(self, shap: bool = False) -> pd.DataFrame:  # pylint: disable=R0914
+    def construct_scorecard(self) -> pd.DataFrame:  # pylint: disable=R0914
         """
         Constructs a scorecard based on a booster.
-
-        Args:
-            shap: If True, add average SHAP values per leaf to the scorecard
 
         Returns:
             pd.DataFrame: The constructed scorecard.
@@ -400,10 +397,6 @@ class XGBScorecardConstructor:
         # Retrieve a detailed split
         self.xgb_scorecard = self.add_detailed_split(dataframe=self.xgb_scorecard)
 
-        # Add average SHAP values per leaf if requested
-        if shap:
-            self.xgb_scorecard = self._add_average_shap_to_scorecard(self.xgb_scorecard)
-
         # Build column list
         base_columns = [
             "Tree",
@@ -422,85 +415,7 @@ class XGBScorecardConstructor:
             "DetailedSplit",
         ]
 
-        # Add SHAP column if it exists
-        if "SHAP" in self.xgb_scorecard.columns:
-            base_columns.append("SHAP")
-
         return self.xgb_scorecard[base_columns]
-
-    def _add_average_shap_to_scorecard(self, scorecard: pd.DataFrame) -> pd.DataFrame:
-        """
-        Add per-tree SHAP values to the scorecard.
-
-        For each (Tree, Node) combination, we compute the margin contribution from that
-        specific tree. This is deterministic per leaf - all observations in the same leaf
-        receive the same contribution from that tree.
-
-        The SHAP value is adjusted so that sum(Table SHAP) = sum(Feature SHAP), making
-        the table SHAP values consistent with predict_score(method="shap").
-
-        Args:
-            scorecard: The scorecard DataFrame
-
-        Returns:
-            Scorecard with SHAP column added (per-tree margin contribution, adjusted)
-        """
-        try:
-            # Get per-tree margin contributions (deterministic per leaf)
-            margin_per_tree = self.get_leafs(self.X, output_type="margin")
-
-            # Get leaf indices for training data
-            leaf_indices_df = self.get_leafs(self.X, output_type="leaf_index")
-
-            # Compute base value adjustment
-            # The per-tree margins use constructor's base_score, but TreeSHAP uses a different
-            # base_value. We need to adjust so that sum(Table SHAP) = sum(Feature SHAP).
-            shap_values_full = extract_shap_values_xgb(
-                self.model, self.X.head(1), self.base_score, self.enable_categorical
-            )
-            shap_base_value = float(shap_values_full[0, -1])
-            n_trees = len(scorecard["Tree"].unique())
-            # Distribute the adjustment across all trees
-            base_adjustment = (self.base_score - shap_base_value) / n_trees
-
-            # Initialize SHAP column
-            scorecard["SHAP"] = np.nan
-
-            # For each (Tree, Node) combination, get the per-tree margin (deterministic per leaf)
-            for tree_idx in scorecard["Tree"].unique():
-                tree_col = f"tree_{tree_idx}"
-                tree_margins = margin_per_tree[tree_col].values
-                tree_leaf_indices = leaf_indices_df[tree_col].values
-
-                for _, leaf_row in scorecard[scorecard["Tree"] == tree_idx].iterrows():
-                    node_idx = leaf_row["Node"]
-
-                    # Find observations that fall into this leaf
-                    mask = tree_leaf_indices == node_idx
-
-                    if mask.any():
-                        # All observations in the same leaf have the same margin from this tree
-                        leaf_margin = tree_margins[mask][0]
-
-                        # Apply base adjustment so Table SHAP matches Feature SHAP
-                        adjusted_margin = leaf_margin + base_adjustment
-
-                        # Update scorecard
-                        scorecard.loc[
-                            (scorecard["Tree"] == tree_idx) & (scorecard["Node"] == node_idx),
-                            "SHAP",
-                        ] = adjusted_margin
-
-            return scorecard
-
-        except Exception as e:
-            # If extraction fails, return scorecard without SHAP column
-            import warnings
-
-            warnings.warn(
-                f"Failed to add SHAP values to scorecard: {e}. Returning scorecard without SHAP."
-            )
-            return scorecard
 
     def create_points(  # pylint: disable=R0913
         self,

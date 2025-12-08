@@ -291,12 +291,10 @@ def test_construct_scorecard(scorecard_constructor):  # pylint: disable=W0621
     scorecard = scorecard_constructor.construct_scorecard()
     assert isinstance(scorecard, pd.DataFrame)
     assert not scorecard.empty
-    # Verify SHAP column exists only when shap=True
-    assert "SHAP" not in scorecard.columns
-
-    # Test with shap=True
-    scorecard_with_shap = scorecard_constructor.construct_scorecard(shap=True)
-    assert "SHAP" in scorecard_with_shap.columns
+    # Verify essential columns exist
+    assert "XAddEvidence" in scorecard.columns
+    assert "WOE" in scorecard.columns
+    assert "IV" in scorecard.columns
 
 
 def test_shap_integration(scorecard_constructor):  # pylint: disable=W0621
@@ -325,35 +323,29 @@ def test_shap_integration(scorecard_constructor):  # pylint: disable=W0621
     assert shap_values.shape[0] == X.shape[0]  # Same number of samples
     assert shap_values.shape[1] == X.shape[1] + 1  # Features + base_value
 
-    # Test construct_scorecard with shap=True includes SHAP column
-    scorecard = scorecard_constructor.construct_scorecard(shap=True)
-    assert "SHAP" in scorecard.columns
-    assert scorecard["SHAP"].dtype in [float, "float64"]
-
     # Test predict_score with method="shap"
+    scorecard_constructor.construct_scorecard()
     scorecard_constructor.create_points()
     shap_score = scorecard_constructor.predict_score(X, method="shap")
     assert isinstance(shap_score, pd.Series)
     assert len(shap_score) == len(X)
 
 
-def test_shap_table_equivalence(scorecard_constructor):  # pylint: disable=W0621
+def test_xaddevidence_shap_equivalence(scorecard_constructor):  # pylint: disable=W0621
     """
-    Test that SHAP values from the scorecard table match feature SHAP values.
+    Test that XAddEvidence from the scorecard table relates to feature SHAP values.
 
-    This verifies that:
-    1. SHAP column contains per-tree margin contributions
-    2. Sum of table SHAP across trees equals sum of feature SHAP
-    3. Scores derived from both methods match
+    XAddEvidence stores per-tree margin contributions (leaf weights).
+    When adjusted for the base value difference, sum(XAddEvidence) equals sum(Feature SHAP).
     """
     import numpy as np
     from xbooster.shap_scorecard import extract_shap_values_xgb
 
     X = scorecard_constructor.X  # pylint: disable=C0103
 
-    # Build scorecard with SHAP column
-    scorecard = scorecard_constructor.construct_scorecard(shap=True)
-    assert "SHAP" in scorecard.columns
+    # Build scorecard
+    scorecard = scorecard_constructor.construct_scorecard()
+    assert "XAddEvidence" in scorecard.columns
 
     # Get feature SHAP values
     shap_values_full = extract_shap_values_xgb(
@@ -369,23 +361,27 @@ def test_shap_table_equivalence(scorecard_constructor):  # pylint: disable=W0621
     leaf_indices = scorecard_constructor.get_leafs(X.head(10), output_type="leaf_index")
     n_trees = len(scorecard["Tree"].unique())
 
-    # Sum SHAP from table across all trees
-    table_shap_sum = []
+    # Compute base value adjustment (distributed across trees)
+    base_adjustment = (scorecard_constructor.base_score - shap_base_value) / n_trees
+
+    # Sum XAddEvidence from table across all trees (with adjustment)
+    table_margin_sum = []
     for idx in range(10):
         obs_leafs = leaf_indices.iloc[idx]
-        total_shap = 0.0
+        total_margin = 0.0
         for tree_idx in range(n_trees):
             node_idx = obs_leafs.iloc[tree_idx]
             row = scorecard[(scorecard["Tree"] == tree_idx) & (scorecard["Node"] == node_idx)]
             if not row.empty:
-                total_shap += row["SHAP"].iloc[0]
-        table_shap_sum.append(total_shap)
-    table_shap_sum = np.array(table_shap_sum)
+                # XAddEvidence + adjustment = equivalent to feature SHAP
+                total_margin += row["XAddEvidence"].iloc[0] + base_adjustment
+        table_margin_sum.append(total_margin)
+    table_margin_sum = np.array(table_margin_sum)
 
-    # Verify that table SHAP sum equals feature SHAP sum
-    assert np.allclose(table_shap_sum, feature_shap_sum, atol=1e-4), (
-        f"Table SHAP sum should equal Feature SHAP sum. "
-        f"Max diff: {np.abs(table_shap_sum - feature_shap_sum).max()}"
+    # Verify that adjusted XAddEvidence sum equals feature SHAP sum
+    assert np.allclose(table_margin_sum, feature_shap_sum, atol=1e-4), (
+        f"Adjusted XAddEvidence sum should equal Feature SHAP sum. "
+        f"Max diff: {np.abs(table_margin_sum - feature_shap_sum).max()}"
     )
 
     # Verify scores match when using same scaling approach
@@ -394,13 +390,15 @@ def test_shap_table_equivalence(scorecard_constructor):  # pylint: disable=W0621
     offset = target_points - factor * np.log(target_odds)
     intercept_scaled = factor * shap_base_value
 
-    scores_from_table = np.round(factor * (-table_shap_sum) - intercept_scaled + offset).astype(int)
+    scores_from_table = np.round(factor * (-table_margin_sum) - intercept_scaled + offset).astype(
+        int
+    )
     scores_from_feature = np.round(factor * (-feature_shap_sum) - intercept_scaled + offset).astype(
         int
     )
 
     assert np.array_equal(scores_from_table, scores_from_feature), (
-        "Scores from table SHAP should match scores from feature SHAP"
+        "Scores from adjusted XAddEvidence should match scores from feature SHAP"
     )
 
 
