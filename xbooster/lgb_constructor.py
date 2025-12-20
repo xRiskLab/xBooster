@@ -293,10 +293,13 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
                 f"Invalid leaf index shape {tree_leaf_idx.shape}. Expected {(len(labels), n_trees)}"
             )
 
-        df_long = pd.DataFrame(tree_leaf_idx).melt(var_name="Tree", value_name="Node")
-        df_long["label"] = np.tile(labels.values, tree_leaf_idx.shape[1])
+        # Aggregate indices, leafs, and counts of events and non-events
+        tree_leaf_idx_long = pd.DataFrame(tree_leaf_idx).melt(var_name="Tree", value_name="Node")
+        tree_leaf_idx_long["label"] = np.tile(labels.values, tree_leaf_idx.shape[1])
         binning_table = (
-            df_long.groupby(["Tree", "Node"])["label"].agg(["sum", "count"]).reset_index()
+            tree_leaf_idx_long.groupby(["Tree", "Node"])["label"]
+            .agg(["sum", "count"])
+            .reset_index()
         )
         binning_table.columns = ["Tree", "Node", "Events", "Count"]
         df_binning_table = binning_table.assign(
