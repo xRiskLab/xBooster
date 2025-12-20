@@ -293,36 +293,24 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
                 f"Invalid leaf index shape {tree_leaf_idx.shape}. Expected {(len(labels), n_trees)}"
             )
 
-        df_binning_table = pd.DataFrame()
-        for i in range(n_trees):
-            index_and_label = pd.concat(
-                [
-                    pd.Series(tree_leaf_idx[:, i], name="leaf_idx"),
-                    pd.Series(labels, name="label"),
-                ],
-                axis=1,
-            )
-            # Create a binning table
-            binning_table = (
-                index_and_label.groupby("leaf_idx").agg(["sum", "count"]).reset_index()
-            ).astype(float)
-            binning_table.columns = ["leaf_idx", "Events", "Count"]  # type: ignore
-            binning_table["tree"] = i
-            binning_table["NonEvents"] = binning_table["Count"] - binning_table["Events"]
-            binning_table["EventRate"] = binning_table["Events"] / binning_table["Count"]
-            binning_table = binning_table[
-                ["tree", "leaf_idx", "Events", "NonEvents", "Count", "EventRate"]
-            ]
-            # Aggregate indices, leafs, and counts of events and non-events
-            df_binning_table = pd.concat([df_binning_table, binning_table], axis=0)
+        df_long = pd.DataFrame(tree_leaf_idx).melt(var_name="Tree", value_name="Node")
+        df_long["label"] = np.tile(labels.values, tree_leaf_idx.shape[1])
+        binning_table = (
+            df_long.groupby(["Tree", "Node"])["label"].agg(["sum", "count"]).reset_index()
+        )
+        binning_table.columns = ["Tree", "Node", "Events", "Count"]
+        df_binning_table = binning_table.assign(
+            NonEvents=lambda df: df["Count"] - df["Events"],
+            EventRate=lambda df: df["Events"] / df["Count"],
+        )[["Tree", "Node", "Events", "NonEvents", "Count", "EventRate"]]
+
         # Extract leaf weights (XAddEvidence)
         df_x_add_evidence = self.extract_leaf_weights()
         self.lgb_scorecard = df_x_add_evidence.merge(
             df_binning_table,
-            left_on=["Tree", "Node"],
-            right_on=["tree", "leaf_idx"],
+            on=["Tree", "Node"],
             how="left",
-        ).drop(["tree", "leaf_idx"], axis=1)
+        )
 
         self.lgb_scorecard = self.lgb_scorecard[
             [
