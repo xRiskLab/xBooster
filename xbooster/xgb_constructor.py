@@ -540,22 +540,23 @@ class XGBScorecardConstructor:
 
         """
         X_leaf_weights = self.get_leafs(X, output_type="leaf_index")  # pylint: disable=C0103
-        result = pd.DataFrame()
-        for col in X_leaf_weights.columns:
-            tree_number = col.split("_")[1]
-            if self.xgb_scorecard_with_points is not None:
-                subset_points_df = self.xgb_scorecard_with_points[
-                    self.xgb_scorecard_with_points["Tree"] == int(tree_number)
-                ].copy()
-                merged_df = pd.merge(
-                    X_leaf_weights[[col]].round(4),
-                    subset_points_df[["Node", "Points"]],
-                    left_on=col,
-                    right_on="Node",
-                    how="left",
-                )
-                result[f"Score_{tree_number}"] = merged_df["Points"]
-        result = pd.concat([result, result.sum(axis=1).rename("Score")], axis=1)
+        n_samples, n_rounds = X_leaf_weights.shape
+        points_matrix = np.zeros((n_samples, n_rounds))
+        leaf_idx_values = X_leaf_weights.values
+        for t in range(n_rounds):
+            # Get points for this tree
+            tree_points = self.xgb_scorecard_with_points[
+                self.xgb_scorecard_with_points["Tree"] == t
+            ]
+            # Mapping dictionary instead of merge
+            mapping_dict = dict(zip(tree_points["Node"], tree_points["Points"]))
+            points_matrix[:, t] = np.vectorize(mapping_dict.get)(leaf_idx_values[:, t])
+
+        result = pd.DataFrame(
+            points_matrix, index=X.index, columns=[f"Score_{i}" for i in range(n_rounds)]
+        )
+        # Add total score
+        result["Score"] = points_matrix.sum(axis=1)
         return result
 
     def predict_score(self, X: pd.DataFrame) -> pd.Series:  # pylint: disable=C0103
