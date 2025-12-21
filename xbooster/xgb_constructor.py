@@ -334,7 +334,6 @@ class XGBScorecardConstructor:
         n_rounds = self.booster_.num_boosted_rounds()
         labels = xgb_features_and_labels.get_label()
 
-        df_binning_table = pd.DataFrame()
         # TODO: Refactor this part to re-use the get_leafs method in the future
         # Summing margins from a booster, adopted from here:
         # https://xgboost.readthedocs.io/en/latest/python/examples/individual_trees.html
@@ -345,52 +344,27 @@ class XGBScorecardConstructor:
                 f"Invalid leaf index shape {tree_leaf_idx.shape}. Expected {(len(labels), n_rounds)}"
             )
 
-        for i in range(n_rounds):
-            # Get counts of events and non-events
-            index_and_label = pd.concat(
-                [
-                    pd.Series(tree_leaf_idx[:, i], name="leaf_idx"),
-                    pd.Series(labels, name="label"),
-                ],
-                axis=1,
-            )
-            # Create a binning table
-            binning_table = (
-                index_and_label.groupby("leaf_idx").agg(["sum", "count"]).reset_index()
-            ).astype(float)
-            binning_table.columns = ["leaf_idx", "Events", "Count"]  # type: ignore
-            binning_table["tree"] = i
-            binning_table["NonEvents"] = binning_table["Count"] - binning_table["Events"]
-            binning_table["EventRate"] = binning_table["Events"] / binning_table["Count"]
-            binning_table = binning_table[
-                ["tree", "leaf_idx", "Events", "NonEvents", "Count", "EventRate"]
-            ]
-            # Aggregate indices, leafs, and counts of events and non-events
-            df_binning_table = pd.concat([df_binning_table, binning_table], axis=0)
+        tree_leaf_idx_long = pd.DataFrame(tree_leaf_idx).melt(var_name="Tree", value_name="Node")
+        tree_leaf_idx_long["label"] = np.tile(labels, tree_leaf_idx.shape[1])
+        binning_table = (
+            tree_leaf_idx_long.groupby(["Tree", "Node"])["label"]
+            .agg(["sum", "count"])
+            .reset_index()
+        )
+        binning_table.columns = ["Tree", "Node", "Events", "Count"]
+        df_binning_table = binning_table.assign(
+            NonEvents=lambda df: df["Count"] - df["Events"],
+            EventRate=lambda df: df["Events"] / df["Count"],
+        )[["Tree", "Node", "Events", "NonEvents", "Count", "EventRate"]]
+
         # Extract leaf weights (XAddEvidence)
         df_x_add_evidence = self.extract_leaf_weights()
 
         self.xgb_scorecard = df_x_add_evidence.merge(
             df_binning_table,
-            left_on=["Tree", "Node"],
-            right_on=["tree", "leaf_idx"],
+            on=["Tree", "Node"],
             how="left",
-        ).drop(["tree", "leaf_idx"], axis=1)
-
-        self.xgb_scorecard = self.xgb_scorecard[
-            [
-                "Tree",
-                "Node",
-                "Feature",
-                "Sign",
-                "Split",
-                "Count",
-                "NonEvents",
-                "Events",
-                "EventRate",
-                "XAddEvidence",
-            ]
-        ]
+        )
 
         # Sort by Tree and Node
         self.xgb_scorecard = self.xgb_scorecard.sort_values(by=["Tree", "Node"]).reset_index(
