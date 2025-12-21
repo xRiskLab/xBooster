@@ -539,6 +539,10 @@ class XGBScorecardConstructor:
             pd.DataFrame: The DataFrame containing scores per tree and the total score.
 
         """
+        if self.xgb_scorecard_with_points is None:
+            raise ValueError(
+                "No scorecard with points has been created yet. Call create_points() first."
+            )
         X_leaf_weights = self.get_leafs(X, output_type="leaf_index")  # pylint: disable=C0103
         n_samples, n_rounds = X_leaf_weights.shape
         points_matrix = np.zeros((n_samples, n_rounds))
