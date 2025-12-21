@@ -17,7 +17,6 @@ exclude = [
 include = [
     "/xbooster",
     "/tests",
-    "/examples",
     "/README.md",
     "/LICENSE.md",
 ]
