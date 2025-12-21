@@ -180,13 +180,12 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
 
         # For margin output, get raw scores per tree
         # Each tree's prediction is returned as-is (no base_score adjustment needed)
-        df_leafs = pd.DataFrame()
-
+        tree_results = []
         for i in range(n_trees):
-            df_leafs[f"tree_{i}"] = self.model.predict(
-                X, raw_score=True, start_iteration=i, num_iteration=1
-            )
+            res = self.model.predict(X, raw_score=True, start_iteration=i, num_iteration=1)
+            tree_results.append(res)
 
+        df_leafs = pd.DataFrame(np.column_stack(tree_results), index=X.index, columns=_colnames)
         return df_leafs
 
     def extract_leaf_weights(self) -> pd.DataFrame:
