@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.2.8rc1] - 2025-12-04 (Release Candidate)
+
+### Performance Improvements
+- **XGBoost Constructor Optimization** (PR #14, @RektPunk): Optimized `construct_scorecard()` method
+  - Replaced loop-based DataFrame concatenation with vectorized operations
+  - Significant performance improvement for models with many trees
+  - Reduced code complexity while maintaining identical functionality
+
+- **LightGBM Constructor Optimizations** (PRs #10, #11, #13, @RektPunk):
+  - **`construct_scorecard()` optimization** (PR #10): Vectorized binning table creation
+  - **`_convert_tree_to_points()` optimization** (PR #11): Replaced loop+merge with vectorized lookup using `map()`
+  - **`get_leafs()` optimization** (PR #13): Vectorized margin predictions across all trees
+  - All optimizations maintain backward compatibility and numerical equivalence
+
+### Added
+- **SHAP Integration (Alpha)**: Added SHAP-based scoring for all three libraries
+  - **XGBoost**: Native SHAP extraction using `pred_contribs=True`
+  - **LightGBM**: Native SHAP extraction using `pred_contrib=True`
+  - **CatBoost**: Native SHAP extraction using `get_feature_importance(type='ShapValues')`
+  - New `method="shap"` option in `predict_score()` and `predict_scores()` methods
+  - SHAP values computed on-demand (not stored in scorecard binning table)
+  - Feature-level score decomposition via `predict_scores(method="shap")`
+  - Particularly useful for models with `max_depth > 1` where interpretability is challenging
+  - No external dependencies required (uses native SHAP implementations)
+
+### Changed
+- **SHAP Architecture Refactoring**: Moved all SHAP logic to dedicated `shap_scorecard.py` module
+  - SHAP extraction functions centralized: `extract_shap_values_xgb()`, `extract_shap_values_lgb()`, `extract_shap_values_cb()`
+  - SHAP computation is now optional and only performed when `method="shap"` is used
+  - Removed SHAP column from scorecard binning tables (cleaner scorecard structure)
+  - Simplified API: users don't need to import or call SHAP extraction functions directly
+
+### Technical Details
+- All three constructors now support SHAP: `XGBScorecardConstructor`, `LGBScorecardConstructor`, `CatBoostScorecardConstructor`
+- SHAP values computed using native library methods (no shap package dependency)
+- SHAP computation happens on-demand when `predict_score(method="shap")` or `predict_scores(method="shap")` is called
+- Backward compatible: traditional scorecard methods unchanged
+- Cleaner separation of concerns: scorecard construction vs. SHAP computation
+- Performance improvements reduce execution time for large models while maintaining numerical accuracy
+- Release candidate for community testing and feedback
+
 ## [0.2.8a1] - 2025-12-04 (Alpha)
 
 ### Added
