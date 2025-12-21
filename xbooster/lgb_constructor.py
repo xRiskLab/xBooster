@@ -476,27 +476,23 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
 
         # Get leaf indices for all trees
         X_leaf_indices = self.get_leafs(X, output_type="leaf_index")
-
-        result = pd.DataFrame()
-        for col in X_leaf_indices.columns:
-            tree_number = col.split("_")[1]
+        n_samples, n_trees = X_leaf_indices.shape
+        points_matrix = np.zeros((n_samples, n_trees))
+        leaf_idx_values = X_leaf_indices.values
+        for t in range(n_trees):
             # Get points for this tree
-            subset_points_df = self.lgb_scorecard_with_points[
-                self.lgb_scorecard_with_points["Tree"] == int(tree_number)
-            ].copy()
+            tree_points = self.lgb_scorecard_with_points[
+                self.lgb_scorecard_with_points["Tree"] == t
+            ]
+            # Mapping dictionary instead of merge
+            mapping_dict = dict(zip(tree_points["Node"], tree_points["Points"]))
+            points_matrix[:, t] = pd.Series(leaf_idx_values[:, t]).map(mapping_dict).to_numpy()
 
-            # Merge leaf indices with points
-            merged_df = pd.merge(
-                X_leaf_indices[[col]].round(4),
-                subset_points_df[["Node", "Points"]],
-                left_on=col,
-                right_on="Node",
-                how="left",
-            )
-            result[f"Score_{tree_number}"] = merged_df["Points"]
-
+        result = pd.DataFrame(
+            points_matrix, index=X.index, columns=[f"Score_{i}" for i in range(n_trees)]
+        )
         # Add total score
-        result = pd.concat([result, result.sum(axis=1).rename("Score")], axis=1)
+        result["Score"] = points_matrix.sum(axis=1)
         return result
 
     def predict_score(
