@@ -202,15 +202,14 @@ class XGBScorecardConstructor:
             # Predict leaf index
             tree_leaf_idx = self.booster_.predict(xgb_features, pred_leaf=True)
             return pd.DataFrame(tree_leaf_idx, columns=_colnames)
-
-        df_leafs = pd.DataFrame()
+        tree_results = []
         for i in range(n_rounds):
-            # Predict margin
             tree_leafs = (
                 self.booster_.predict(xgb_features, iteration_range=(i, i + 1), output_margin=True)
                 - scores
             )
-            df_leafs[f"tree_{i}"] = tree_leafs.flatten()
+            tree_results.append(tree_leafs.flatten())
+        df_leafs = pd.DataFrame(np.column_stack(tree_results), index=X.index, columns=_colnames)
         return df_leafs
 
     def extract_leaf_weights(self) -> pd.DataFrame:
@@ -335,7 +334,6 @@ class XGBScorecardConstructor:
         n_rounds = self.booster_.num_boosted_rounds()
         labels = xgb_features_and_labels.get_label()
 
-        df_binning_table = pd.DataFrame()
         # TODO: Refactor this part to re-use the get_leafs method in the future
         # Summing margins from a booster, adopted from here:
         # https://xgboost.readthedocs.io/en/latest/python/examples/individual_trees.html
@@ -346,52 +344,27 @@ class XGBScorecardConstructor:
                 f"Invalid leaf index shape {tree_leaf_idx.shape}. Expected {(len(labels), n_rounds)}"
             )
 
-        for i in range(n_rounds):
-            # Get counts of events and non-events
-            index_and_label = pd.concat(
-                [
-                    pd.Series(tree_leaf_idx[:, i], name="leaf_idx"),
-                    pd.Series(labels, name="label"),
-                ],
-                axis=1,
-            )
-            # Create a binning table
-            binning_table = (
-                index_and_label.groupby("leaf_idx").agg(["sum", "count"]).reset_index()
-            ).astype(float)
-            binning_table.columns = ["leaf_idx", "Events", "Count"]  # type: ignore
-            binning_table["tree"] = i
-            binning_table["NonEvents"] = binning_table["Count"] - binning_table["Events"]
-            binning_table["EventRate"] = binning_table["Events"] / binning_table["Count"]
-            binning_table = binning_table[
-                ["tree", "leaf_idx", "Events", "NonEvents", "Count", "EventRate"]
-            ]
-            # Aggregate indices, leafs, and counts of events and non-events
-            df_binning_table = pd.concat([df_binning_table, binning_table], axis=0)
+        tree_leaf_idx_long = pd.DataFrame(tree_leaf_idx).melt(var_name="Tree", value_name="Node")
+        tree_leaf_idx_long["label"] = np.tile(labels, tree_leaf_idx.shape[1])
+        binning_table = (
+            tree_leaf_idx_long.groupby(["Tree", "Node"])["label"]
+            .agg(["sum", "count"])
+            .reset_index()
+        )
+        binning_table.columns = ["Tree", "Node", "Events", "Count"]
+        df_binning_table = binning_table.assign(
+            NonEvents=lambda df: df["Count"] - df["Events"],
+            EventRate=lambda df: df["Events"] / df["Count"],
+        )[["Tree", "Node", "Events", "NonEvents", "Count", "EventRate"]]
+
         # Extract leaf weights (XAddEvidence)
         df_x_add_evidence = self.extract_leaf_weights()
 
         self.xgb_scorecard = df_x_add_evidence.merge(
             df_binning_table,
-            left_on=["Tree", "Node"],
-            right_on=["tree", "leaf_idx"],
+            on=["Tree", "Node"],
             how="left",
-        ).drop(["tree", "leaf_idx"], axis=1)
-
-        self.xgb_scorecard = self.xgb_scorecard[
-            [
-                "Tree",
-                "Node",
-                "Feature",
-                "Sign",
-                "Split",
-                "Count",
-                "NonEvents",
-                "Events",
-                "EventRate",
-                "XAddEvidence",
-            ]
-        ]
+        )
 
         # Sort by Tree and Node
         self.xgb_scorecard = self.xgb_scorecard.sort_values(by=["Tree", "Node"]).reset_index(
@@ -566,23 +539,28 @@ class XGBScorecardConstructor:
             pd.DataFrame: The DataFrame containing scores per tree and the total score.
 
         """
+        if self.xgb_scorecard_with_points is None:
+            raise ValueError(
+                "No scorecard with points has been created yet. Call create_points() first."
+            )
         X_leaf_weights = self.get_leafs(X, output_type="leaf_index")  # pylint: disable=C0103
-        result = pd.DataFrame()
-        for col in X_leaf_weights.columns:
-            tree_number = col.split("_")[1]
-            if self.xgb_scorecard_with_points is not None:
-                subset_points_df = self.xgb_scorecard_with_points[
-                    self.xgb_scorecard_with_points["Tree"] == int(tree_number)
-                ].copy()
-                merged_df = pd.merge(
-                    X_leaf_weights[[col]].round(4),
-                    subset_points_df[["Node", "Points"]],
-                    left_on=col,
-                    right_on="Node",
-                    how="left",
-                )
-                result[f"Score_{tree_number}"] = merged_df["Points"]
-        result = pd.concat([result, result.sum(axis=1).rename("Score")], axis=1)
+        n_samples, n_rounds = X_leaf_weights.shape
+        points_matrix = np.zeros((n_samples, n_rounds))
+        leaf_idx_values = X_leaf_weights.values
+        for t in range(n_rounds):
+            # Get points for this tree
+            tree_points = self.xgb_scorecard_with_points[
+                self.xgb_scorecard_with_points["Tree"] == t
+            ]
+            # Mapping dictionary instead of merge
+            mapping_dict = dict(zip(tree_points["Node"], tree_points["Points"]))
+            points_matrix[:, t] = pd.Series(leaf_idx_values[:, t]).map(mapping_dict).to_numpy()
+
+        result = pd.DataFrame(
+            points_matrix, index=X.index, columns=[f"Score_{i}" for i in range(n_rounds)]
+        )
+        # Add total score
+        result["Score"] = points_matrix.sum(axis=1)
         return result
 
     def predict_score(self, X: pd.DataFrame) -> pd.Series:  # pylint: disable=C0103

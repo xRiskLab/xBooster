@@ -126,7 +126,7 @@ class TestXGBRegression:
         # Verify data types
         assert pd.api.types.is_integer_dtype(scorecard["Tree"])
         assert pd.api.types.is_integer_dtype(scorecard["Node"])
-        assert pd.api.types.is_float_dtype(scorecard["Count"])
+        assert pd.api.types.is_integer_dtype(scorecard["Count"])
         assert pd.api.types.is_float_dtype(scorecard["EventRate"])
 
     def test_construct_scorecard_statistical_properties(self, sample_data, trained_model):
