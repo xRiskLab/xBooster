@@ -202,15 +202,14 @@ class XGBScorecardConstructor:
             # Predict leaf index
             tree_leaf_idx = self.booster_.predict(xgb_features, pred_leaf=True)
             return pd.DataFrame(tree_leaf_idx, columns=_colnames)
-
-        df_leafs = pd.DataFrame()
+        tree_results = []
         for i in range(n_rounds):
-            # Predict margin
             tree_leafs = (
                 self.booster_.predict(xgb_features, iteration_range=(i, i + 1), output_margin=True)
                 - scores
             )
-            df_leafs[f"tree_{i}"] = tree_leafs.flatten()
+            tree_results.append(tree_leafs.flatten())
+        df_leafs = pd.DataFrame(np.column_stack(tree_results), index=X.index, columns=_colnames)
         return df_leafs
 
     def extract_leaf_weights(self) -> pd.DataFrame:
