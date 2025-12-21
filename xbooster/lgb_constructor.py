@@ -504,7 +504,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             ]
             # Mapping dictionary instead of merge
             mapping_dict = dict(zip(tree_points["Node"], tree_points["Points"]))
-            points_matrix[:, t] = np.vectorize(mapping_dict.get)(leaf_idx_values[:, t])
+            points_matrix[:, t] = pd.Series(leaf_idx_values[:, t]).map(mapping_dict).to_numpy()
 
         result = pd.DataFrame(
             points_matrix, index=X.index, columns=[f"Score_{i}" for i in range(n_trees)]
