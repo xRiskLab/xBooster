@@ -20,8 +20,11 @@ from matplotlib.patches import FancyBboxPatch, Patch
 from matplotlib.ticker import MultipleLocator
 
 from ._utils import calculate_information_value, calculate_likelihood, calculate_odds
-from .cb_constructor import CatBoostScorecardConstructor
+from .cb_constructor import CBScorecardConstructor
 from .xgb_constructor import XGBScorecardConstructor
+
+# Backward compatibility alias
+CatBoostScorecardConstructor = CBScorecardConstructor
 
 
 def extract_splits_info(features: str) -> List[Dict[str, Union[str, float]]]:
@@ -266,7 +269,7 @@ def plot_importance(
         raise ValueError("scorecard_constructor must be provided.")
 
     # Check if CatBoost constructor is provided
-    if isinstance(scorecard_constructor, CatBoostScorecardConstructor):
+    if isinstance(scorecard_constructor, CBScorecardConstructor):
         raise NotImplementedError(
             "Plotting feature importance for CatBoost models is not implemented yet. "
             "Please use the constructor's built-in plotting method: constructor.plot_feature_importance()"
@@ -991,7 +994,7 @@ class TreeVisualizer:
 
 
 def plot_catboost_importance(
-    scorecard_constructor: Optional[CatBoostScorecardConstructor] = None,
+    scorecard_constructor: Optional[CBScorecardConstructor] = None,
     metric: str = "XAddEvidence",
     normalize: bool = True,
     max_features: int = 20,
@@ -1005,7 +1008,7 @@ def plot_catboost_importance(
     Plot feature importance for CatBoost scorecard.
 
     Args:
-        scorecard_constructor: CatBoostScorecardConstructor instance
+        scorecard_constructor: CBScorecardConstructor instance
         metric: Metric to use for importance ('XAddEvidence', 'WOE', 'IV')
         normalize: Whether to normalize the importance values
         max_features: Maximum number of features to display (default: 20)

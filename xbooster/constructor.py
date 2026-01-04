@@ -15,8 +15,11 @@ from typing import Any, Dict, Optional, Protocol, Union
 
 import pandas as pd
 
-from xbooster.cb_constructor import CatBoostScorecardConstructor
+from xbooster.cb_constructor import CBScorecardConstructor
 from xbooster.xgb_constructor import XGBScorecardConstructor
+
+# Backward compatibility alias
+CatBoostScorecardConstructor = CBScorecardConstructor
 
 
 class ScorecardConstructor(Protocol):
@@ -38,4 +41,4 @@ class ScorecardConstructor(Protocol):
     def generate_sql_query(self, table_name: str = "my_table") -> str: ...
 
 
-__all__ = ["XGBScorecardConstructor", "CatBoostScorecardConstructor"]
+__all__ = ["XGBScorecardConstructor", "CBScorecardConstructor", "CatBoostScorecardConstructor"]

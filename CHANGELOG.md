@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.2.8rc2] - 2025-12-04 (Release Candidate)
+
+### Changed
+- **SHAP Module Refactoring**: Simplified SHAP API and module structure
+  - Removed unused `compute_shap_scores_decomposed()` function
+  - Simplified `compute_shap_scores()` to only require `shap_values`, `base_value`, and `feature_names`
+  - Removed model-based SHAP extraction parameters (always extract first, then compute scores)
+  - Module accessible via `from xbooster import shap` for cleaner imports
+
+- **XGBoost Leaf Index Format**: Fixed `get_leafs()` to return integer leaf indices
+  - Leaf indices now returned as integers (7) instead of floats (7.0)
+  - Matches LightGBM behavior for consistency across constructors
+  - Improves readability and consistency in output
+
+### Fixed
+- **Package Distribution**: Excluded examples directory from sdist to reduce package size (~8.1MB reduction)
+  - Examples remain available in GitHub repository
+  - Matches best practice for distribution packages
+
 ## [0.2.8rc1] - 2025-12-04 (Release Candidate)
 
 ### Performance Improvements

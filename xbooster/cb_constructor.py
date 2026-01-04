@@ -12,6 +12,7 @@ This code is licensed under the MIT License.
 Copyright (c) 2025 xRiskLab
 """
 
+import contextlib
 from typing import Any, Dict, Optional, Union
 
 import numpy as np
@@ -23,7 +24,7 @@ from xbooster.catboost_wrapper import CatBoostWOEMapper
 from xbooster.shap_scorecard import compute_shap_scores, extract_shap_values_cb
 
 
-class CatBoostScorecardConstructor:
+class CBScorecardConstructor:
     """
     A high-level interface for working with CatBoost scorecards.
     This class combines the functionality of CatBoostScorecard and CatBoostWOEMapper
@@ -33,7 +34,8 @@ class CatBoostScorecardConstructor:
     def __init__(
         self,
         model: Optional[CatBoostClassifier] = None,
-        pool: Optional[Pool] = None,
+        pool: Optional[Union[Pool, pd.DataFrame]] = None,
+        y: Optional[pd.Series] = None,
         use_woe: bool = False,
         points_column: Optional[str] = None,
     ) -> None:
@@ -42,14 +44,49 @@ class CatBoostScorecardConstructor:
 
         Args:
             model: Trained CatBoostClassifier
-            pool: CatBoost Pool object used for training/validation
+            pool: CatBoost Pool object OR DataFrame (X) for training/validation.
+                  If DataFrame is provided, y must also be provided to create Pool automatically.
+            y: Labels (required if pool is a DataFrame)
             use_woe: If True, use WOE values; if False, use XAddEvidence (default: False)
             points_column: If provided, use this column for scoring
+
+        Examples:
+            # Using Pool object (original API)
+            constructor = CBScorecardConstructor(model, pool)
+
+            # Using X, y (consistent with XGBoost/LightGBM API)
+            constructor = CBScorecardConstructor(model, X_train, y_train)
         """
         self.model = model
-        self.pool = pool
         self.use_woe = use_woe
         self.points_column = points_column
+
+        # Support both Pool object and (X, y) pattern for consistency with XGBoost/LightGBM
+        if isinstance(pool, pd.DataFrame) and y is not None:
+            # Create Pool from X and y (consistent with XGBoost/LightGBM API)
+            # Extract categorical features from model if available
+            cat_features = None
+            if self.model is not None:
+                with contextlib.suppress(AttributeError, RuntimeError):
+                    if cat_feature_indices := self.model.get_cat_feature_indices():
+                        cat_features = cat_feature_indices
+            self.pool = Pool(pool, y, cat_features=cat_features)
+            self.X = pool  # Store for get_leafs() method
+            self.y = y
+        elif isinstance(pool, Pool):
+            # Original API: Pool object provided
+            self.pool = pool
+            self.X = None  # Will be extracted from pool if needed
+            self.y = None
+        else:
+            # No pool provided (lazy initialization)
+            self.pool = pool
+            self.X = None
+            self.y = None
+
+        # Auto-build scorecard if both model and pool are provided
+        if self.model is not None and self.pool is not None:
+            self._build_scorecard()
         self.scorecard_df: Optional[pd.DataFrame] = None
         self.mapper: Optional[CatBoostWOEMapper] = None
         self.scorecard: Optional[pd.DataFrame] = None
@@ -210,6 +247,46 @@ class CatBoostScorecardConstructor:
         if self.scorecard_df is None:
             raise ValueError("Scorecard not built yet. Call fit() first.")
         return self.scorecard_df
+
+    def get_leafs(
+        self,
+        X: pd.DataFrame,  # pylint: disable=C0103
+        output_type: str = "leaf_index",
+    ) -> pd.DataFrame:
+        """
+        Get leaf indices for a new dataset.
+
+        Args:
+            X: Input features DataFrame
+            output_type: 'leaf_index' (only supported type for CatBoost)
+
+        Returns:
+            DataFrame with columns [tree_0, tree_1, ..., tree_n] containing leaf indices
+
+        Note:
+            CatBoost uses calc_leaf_indexes() which returns integer leaf indices.
+            The 'margin' output_type is not supported for CatBoost.
+        """
+        if self.model is None:
+            raise ValueError("Model must be set before calling get_leafs()")
+
+        if output_type != "leaf_index":
+            raise ValueError(f"CatBoost only supports output_type='leaf_index'. Got: {output_type}")
+
+        # Create Pool from X (no labels needed for leaf prediction)
+        # Extract categorical features from model if available
+        cat_features = None
+        with contextlib.suppress(AttributeError, RuntimeError):
+            if cat_feature_indices := self.model.get_cat_feature_indices():
+                cat_features = cat_feature_indices
+        pool = Pool(X, cat_features=cat_features)
+        leaf_indices = self.model.calc_leaf_indexes(pool)
+
+        n_trees = leaf_indices.shape[1]
+        _colnames = [f"tree_{i}" for i in range(n_trees)]
+
+        # Return as integer DataFrame (matching XGBoost/LightGBM behavior)
+        return pd.DataFrame(leaf_indices, columns=_colnames).astype(int)
 
     def get_feature_importance(self) -> Dict[str, float]:
         """
@@ -465,11 +542,7 @@ class CatBoostScorecardConstructor:
         scorecard = self.construct_scorecard().copy()
 
         # Select value column based on score_type
-        if score_type == "XAddEvidence":
-            value_col = "XAddEvidence"
-        else:  # Default to WOE
-            value_col = "WOE"
-
+        value_col = "XAddEvidence" if score_type == "XAddEvidence" else "WOE"
         # Get base value based on score_type
         if "EventRate" in scorecard.columns:
             # For WOE/XAddEvidence, use average event rate
@@ -533,7 +606,6 @@ class CatBoostScorecardConstructor:
         pdo: float = 50,
         target_points: float = 600,
         target_odds: float = 19,
-        intercept_based: bool = True,
     ) -> pd.DataFrame:
         """
         Predict decomposed scores for a given dataset.
@@ -546,7 +618,6 @@ class CatBoostScorecardConstructor:
             pdo: Points to Double the Odds (only used for method='shap')
             target_points: Target score for reference odds (only used for method='shap')
             target_odds: Reference odds ratio (only used for method='shap')
-            intercept_based: If True, distribute intercept and offset across features (default: True)
 
         Returns:
             DataFrame with decomposed scores (tree-level for default, feature-level for SHAP)
@@ -557,9 +628,7 @@ class CatBoostScorecardConstructor:
                 pdo = self.pdo_params.get("pdo", pdo)
                 target_points = self.pdo_params.get("target_points", target_points)
                 target_odds = self.pdo_params.get("target_odds", target_odds)
-            return self._predict_scores_shap(
-                features, pdo, target_points, target_odds, intercept_based
-            )
+            return self._predict_scores_shap(features, pdo, target_points, target_odds)
 
         # Default: use traditional scorecard-based approach (tree-level decomposition)
         if self.mapper is None:
@@ -587,17 +656,18 @@ class CatBoostScorecardConstructor:
         pdo: float = 50,
         target_points: float = 600,
         target_odds: float = 19,
-        intercept_based: bool = True,
     ) -> pd.DataFrame:
         """
         Predict decomposed scores using SHAP values (feature-level decomposition).
+
+        Uses intercept-based scoring where intercept and offset are distributed
+        evenly across features, ensuring feature scores sum to the total score.
 
         Args:
             features: Input features DataFrame or dictionary
             pdo: Points to Double the Odds
             target_points: Target score for reference odds
             target_odds: Reference odds ratio
-            intercept_based: If True, distribute intercept and offset across features (default: True)
 
         Returns:
             DataFrame with feature-level score contributions and total score
@@ -629,17 +699,12 @@ class CatBoostScorecardConstructor:
             "target_odds": target_odds,
         }
 
-        # Compute SHAP-based scores with feature-level decomposition
-        scorecard_df = compute_shap_scores(
+        return compute_shap_scores(
             shap_values=shap_values,
             base_value=base_value,
             feature_names=features_df.columns.tolist(),
             scorecard_dict=scorecard_dict,
-            intercept_based=intercept_based,
         )
-
-        # Return DataFrame with feature scores and total score
-        return scorecard_df
 
     def generate_sql_query(self):
         """

@@ -12,96 +12,107 @@ This code is licensed under the MIT License.
 Copyright (c) 2025 xRiskLab
 """
 
-from typing import Dict, Optional
+from __future__ import annotations
+
+import importlib
+from typing import Any, Dict, Optional, TypeVar, overload
 
 import numpy as np
 import pandas as pd
 
-try:
-    import xgboost as xgb
-except ImportError:
-    xgb = None
+T = TypeVar("T")
 
-try:
-    from lightgbm import LGBMClassifier
-except ImportError:
-    LGBMClassifier = None
 
-try:
-    from catboost import CatBoostClassifier, Pool
-except ImportError:
-    CatBoostClassifier = None
-    Pool = None
+@overload
+def _try_import(module_name: str) -> Any: ...
+
+
+@overload
+def _try_import(module_name: str, *, fromlist: list[str]) -> tuple[Any, ...] | None: ...
+
+
+def _try_import(module_name: str, *, fromlist: list[str] | None = None) -> Any:
+    """
+    Attempt to import a module or attributes, returning None on failure.
+
+    Args:
+        module_name: Name of the module to import
+        fromlist: Optional list of attribute names to import from the module
+
+    Returns:
+        Imported module, attribute(s), or None if import fails
+    """
+    try:
+        module = importlib.import_module(module_name)
+        if not fromlist:
+            return module
+        attrs = [getattr(module, name) for name in fromlist]
+        return attrs[0] if len(attrs) == 1 else tuple(attrs)
+    except (ImportError, AttributeError):
+        return None
+
+
+# Optional ML library imports
+xgb = _try_import("xgboost")
+LGBMClassifier = _try_import("lightgbm", fromlist=["LGBMClassifier"])
+
+# Import multiple from same module efficiently
+Pool, CatBoostClassifier = _try_import("catboost", fromlist=["Pool", "CatBoostClassifier"]) or (
+    None,
+    None,
+)
 
 
 def compute_shap_scores(
-    model=None,
-    X: Optional[pd.DataFrame] = None,  # pylint: disable=C0103
-    y: Optional[pd.Series] = None,
-    shap_values: Optional[np.ndarray] = None,
-    base_value: Optional[float] = None,
+    shap_values: np.ndarray,
+    base_value: float,
+    feature_names: list,
     scorecard_dict: Optional[Dict[str, float]] = None,
-    feature_names: Optional[list] = None,
-    intercept_based: bool = True,
 ) -> pd.DataFrame:
     """
-    Convert SHAP values into a scorecard-like system.
+    Convert SHAP values into a scorecard-like system using intercept-based scoring.
 
     This function computes feature-level scores from SHAP values and maps them to a
-    traditional scorecard scale (PDO, target points, target odds). It supports two
-    scoring modes:
+    traditional scorecard scale (PDO, target points, target odds). The intercept and
+    offset are distributed evenly across all features, ensuring that feature scores
+    sum exactly to the final total score (SAS-style behavior).
 
-    1. Standard mode (intercept_based=False):
-    - Feature scores are based only on SHAP values.
-    - The intercept is subtracted once from the total score.
-    - Feature scores DO NOT sum to the final score.
-
-    2. Intercept-based mode (intercept_based=True):
-    - The intercept and offset are distributed evenly across all features.
-    - Each feature score includes:
-            * a scaled SHAP contribution
-            * an equal share of the intercept term
-            * an equal share of the offset
-    - Feature scores sum exactly to the final score (SAS-style behavior).
+    Each feature score includes:
+        - A scaled SHAP contribution
+        - An equal share of the intercept term
+        - An equal share of the offset
 
     Parameters
     ----------
-    model : Trained model (optional if shap_values and base_value are provided)
-    X : pd.DataFrame, optional
-        Input dataset. Required only if model is directly used.
-    y : pd.Series, optional
-        Target variable (only used if base_value is not provided).
-    shap_values : np.ndarray, optional
+    shap_values : np.ndarray
         SHAP values of shape (n_samples, n_features).
-    base_value : float, optional
+    base_value : float
         SHAP expected value (log-odds). Required for correct scaling.
+    feature_names : list of str
+        Names of features corresponding to columns in shap_values.
     scorecard_dict : dict, optional
         Dictionary containing scoring scale parameters:
             - "pdo": points to double the odds (default=50)
             - "target_points": reference score (default=600)
             - "target_odds": reference odds (default=19)
-    feature_names : list of str
-        Names of features corresponding to columns in shap_values.
-    intercept_based : bool, default=False
-        Whether to distribute intercept and offset across features.
-        If True, feature scores sum to the final total score (SAS-style).
-        If False, intercept is applied once and feature scores will not sum.
 
     Returns
     -------
     pd.DataFrame
         DataFrame containing:
             - {feature}_score columns for each feature
-            - "score" column representing the total score
+            - "score" column representing the total score (sum of feature scores)
 
     Example
     -------
-    >>> shap_values, base_value = extract_shap_values(model, X)
+    >>> from xbooster.shap import extract_shap_values_xgb, compute_shap_scores
+    >>> shap_values_full = extract_shap_values_xgb(model, X, base_score)
+    >>> shap_values = shap_values_full[:, :-1]
+    >>> base_value = float(np.mean(shap_values_full[:, -1]))
     >>> scorecard = compute_shap_scores(
     ...     shap_values=shap_values,
     ...     base_value=base_value,
-    ...     feature_names=X.columns,
-    ...     intercept_based=True,
+    ...     feature_names=X.columns.tolist(),
     ...     scorecard_dict={"pdo": 50, "target_points": 600, "target_odds": 19},
     ... )
     """
@@ -121,125 +132,34 @@ def compute_shap_scores(
     factor = pdo / np.log(2)
     offset = target_points - factor * np.log(target_odds)
 
-    # Get SHAP values and base value
-    if shap_values is not None and base_value is not None:
-        # Use provided SHAP values
-        if feature_names is None:
-            raise ValueError("feature_names must be provided when using precomputed SHAP values")
-        # Keep as numpy array for vectorized operations
-        intercept_ = base_value
-    elif model is not None and X is not None:
-        # Extract SHAP values from model
-        # This is a placeholder - actual extraction should be done by the constructor
-        raise NotImplementedError(
-            "Direct model SHAP extraction not implemented. "
-            "Please use extract_shap_values() from the constructor and pass shap_values and base_value."
-        )
-    else:
-        raise ValueError(
-            "Either (shap_values, base_value, feature_names) or (model, X) must be provided"
-        )
+    # Scale the intercept by factor
+    intercept_scaled = factor * base_value
 
-    # Scale the intercept by factor (as per user requirement)
-    intercept_scaled = factor * intercept_
+    # Distribute intercept and offset across features (matches SAS behavior)
+    n_features = shap_values.shape[1]
 
-    scorecard_df = pd.DataFrame()
+    # Distribute both intercept and offset
+    intercept_contribution = (-intercept_scaled) / n_features
+    offset_contribution = offset / n_features
 
-    if intercept_based:
-        # Distribute intercept and offset across features (matches SAS behavior)
-        n_features = shap_values.shape[1]
+    # Vectorized computation of all feature scores at once
+    feature_scores = factor * (-shap_values) + intercept_contribution + offset_contribution
 
-        # Distribute both intercept and offset
-        intercept_contribution = (-intercept_scaled) / n_features
-        offset_contribution = offset / n_features
+    # Create DataFrame with rounded integer scores
+    feature_score_cols = [f"{f}_score" for f in feature_names]
+    scorecard_df = pd.DataFrame(
+        np.round(feature_scores).astype(np.int64),
+        columns=feature_score_cols,
+    )
 
-        # Vectorized: compute all feature scores at once (3x faster than loop)
-        feature_scores = factor * (-shap_values) + intercept_contribution + offset_contribution
-
-        # Create DataFrame with rounded integer scores
-        feature_score_cols = [f"{f}_score" for f in feature_names]
-        scorecard_df = pd.DataFrame(
-            np.round(feature_scores).astype(np.int64),
-            columns=feature_score_cols,
-        )
-
-        # Total score is the sum of rounded feature scores (matches SAS behavior)
-        scorecard_df["score"] = scorecard_df[feature_score_cols].sum(axis=1).astype(int)
-    else:
-        # Vectorized: compute all feature scores at once
-        feature_scores = factor * (-shap_values)
-
-        # Create DataFrame
-        feature_score_cols = [f"{f}_score" for f in feature_names]
-        scorecard_df = pd.DataFrame(feature_scores, columns=feature_score_cols)
-
-        # Compute final score by summing feature-level scores, subtracting scaled intercept once, and adding offset
-        # Formula: factor * sum(-shap) - factor * intercept + offset
-        scorecard_df["score"] = scorecard_df.sum(axis=1) - intercept_scaled + offset
-
-        # Return as integers (not floats) to avoid .0 display
-        scorecard_df = scorecard_df.round(0).astype(int)
+    # Total score is the sum of rounded feature scores
+    scorecard_df["score"] = scorecard_df[feature_score_cols].sum(axis=1).astype(int)
 
     return scorecard_df
 
 
-def compute_shap_scores_decomposed(
-    shap_values: np.ndarray,
-    base_value: float,
-    feature_names: list,
-    scorecard_dict: Optional[Dict[str, float]] = None,
-) -> pd.DataFrame:
-    """
-    Convert SHAP values into decomposed scores (by feature and optionally by tree).
-
-    This function computes scores directly from SHAP values and provides feature-level
-    decomposition. For tree-level decomposition, SHAP values would need to be computed
-    per tree, which is not directly supported by native SHAP implementations.
-
-    Parameters:
-    -----------
-    shap_values: Precomputed SHAP values array of shape (n_samples, n_features)
-    base_value: Base log-odds score (expected value)
-    feature_names: List of feature names
-    scorecard_dict: Config for score scaling (PDO, target points, target odds)
-
-    Returns:
-    --------
-    pd.DataFrame: Scorecard with feature-wise contributions and final score.
-        Columns: {feature}_score for each feature, and 'score' for final score.
-    """
-    if scorecard_dict is None:
-        scorecard_dict = {
-            "pdo": 50,
-            "target_points": 600,
-            "target_odds": 19,
-        }
-
-    pdo = scorecard_dict["pdo"]
-    target_points = scorecard_dict["target_points"]
-    target_odds = scorecard_dict["target_odds"]
-
-    # Compute scaling factor and offset
-    factor = pdo / np.log(2)
-    offset = target_points - factor * np.log(target_odds)
-
-    intercept_scaled = factor * base_value
-
-    # Vectorized: compute all feature scores at once
-    feature_scores = factor * (-shap_values) + intercept_scaled
-
-    # Create DataFrame
-    feature_score_cols = [f"{f}_score" for f in feature_names]
-    scorecard_df = pd.DataFrame(feature_scores, columns=feature_score_cols)
-
-    # Compute final score
-    scorecard_df["score"] = scorecard_df.sum(axis=1) + offset
-
-    return scorecard_df.round(0)
-
-
 def extract_shap_values_xgb(
-    model: "xgb.XGBClassifier",
+    model: xgb.XGBClassifier,
     X: pd.DataFrame,  # pylint: disable=C0103
     base_score: float,
     enable_categorical: bool = False,
@@ -269,7 +189,7 @@ def extract_shap_values_xgb(
 
 
 def extract_shap_values_lgb(
-    model: "LGBMClassifier",
+    model: LGBMClassifier,
     X: pd.DataFrame,  # pylint: disable=C0103
 ) -> np.ndarray:
     """
@@ -289,7 +209,7 @@ def extract_shap_values_lgb(
 
 
 def extract_shap_values_cb(
-    model: "CatBoostClassifier",
+    model: CatBoostClassifier,
     pool: "Pool",
 ) -> np.ndarray:
     """

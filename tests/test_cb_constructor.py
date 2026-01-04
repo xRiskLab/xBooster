@@ -1,7 +1,7 @@
 """
 Test module for xbooster.cb_constructor.
 
-The CatBoostScorecardConstructor class is responsible for constructing a scorecard from
+The CBScorecardConstructor class is responsible for constructing a scorecard from
 a trained CatBoost model. This module provides test cases to ensure that the class
 functions correctly.
 
@@ -21,15 +21,16 @@ Test cases:
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pandas as pd
 import pytest
 from catboost import CatBoostClassifier, Pool
 from sklearn.datasets import make_classification
 from sklearn.metrics import roc_auc_score
-import os
 
-from xbooster.constructor import CatBoostScorecardConstructor
+from xbooster.constructor import CBScorecardConstructor
 
 
 @pytest.fixture(scope="module")
@@ -97,14 +98,14 @@ def cb_model():
 @pytest.fixture(scope="module")
 def scorecard_constructor(cb_model):
     """
-    Constructs a CatBoostScorecardConstructor object using the given CatBoost model,
+    Constructs a CBScorecardConstructor object using the given CatBoost model,
     feature matrix (X), and target variable (y).
 
     Parameters:
     - cb_model: The trained CatBoost model.
 
     Returns:
-    - CatBoostScorecardConstructor: The initialized CatBoostScorecardConstructor object.
+    - CBScorecardConstructor: The initialized CBScorecardConstructor object.
     """
     X = pd.DataFrame(
         {
@@ -156,7 +157,7 @@ def scorecard_constructor(cb_model):
     )
     y = pd.Series([1, 0, 1, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0])
     pool = Pool(X, y)
-    return CatBoostScorecardConstructor(cb_model, pool)
+    return CBScorecardConstructor(cb_model, pool)
 
 
 @pytest.fixture(scope="module")
@@ -304,7 +305,7 @@ def test_construct_scorecard(scorecard_constructor):
 
 def test_create_points(scorecard_constructor):
     """
-    Test the create_points method of the CatBoostScorecardConstructor class.
+    Test the create_points method of the CBScorecardConstructor class.
 
     This test verifies that the create_points method returns a non-empty
     pandas DataFrame with the expected columns.
@@ -321,7 +322,7 @@ def test_create_points(scorecard_constructor):
 
 def test_predict_score(scorecard_constructor, X_test):
     """
-    Test the predict_score method of the CatBoostScorecardConstructor class.
+    Test the predict_score method of the CBScorecardConstructor class.
 
     This test verifies that the predict_score method returns a non-empty
     pandas Series with predicted scores.
@@ -339,7 +340,7 @@ def test_predict_score(scorecard_constructor, X_test):
 
 def test_predict_scores(scorecard_constructor, X_test):
     """
-    Test the predict_scores method of the CatBoostScorecardConstructor class.
+    Test the predict_scores method of the CBScorecardConstructor class.
 
     This test verifies that the predict_scores method returns a non-empty
     pandas DataFrame with predicted scores per tree and total score.
@@ -368,7 +369,7 @@ def test_woe_mapper_and_gini_scores(credit_data, credit_model):
     model, pool = credit_model
 
     # Create scorecard constructor
-    constructor = CatBoostScorecardConstructor(model, pool)
+    constructor = CBScorecardConstructor(model, pool)
 
     # Construct scorecard and create points
     constructor.construct_scorecard()
@@ -425,8 +426,8 @@ def catboost_pool(sample_data):
 
 
 def test_initialization():
-    """Test initialization of CatBoostScorecardConstructor."""
-    constructor = CatBoostScorecardConstructor()
+    """Test initialization of CBScorecardConstructor."""
+    constructor = CBScorecardConstructor()
     assert constructor.model is None
     assert constructor.pool is None
     assert constructor.use_woe is False
@@ -437,7 +438,7 @@ def test_initialization():
 
 def test_fit(trained_model, catboost_pool):
     """Test fitting the constructor."""
-    constructor = CatBoostScorecardConstructor()
+    constructor = CBScorecardConstructor()
     constructor.fit(trained_model, catboost_pool)
 
     assert constructor.model is trained_model
@@ -448,7 +449,7 @@ def test_fit(trained_model, catboost_pool):
 
 def test_get_scorecard(trained_model, catboost_pool):
     """Test getting the scorecard."""
-    constructor = CatBoostScorecardConstructor()
+    constructor = CBScorecardConstructor()
     constructor.fit(trained_model, catboost_pool)
 
     scorecard = constructor.get_scorecard()
@@ -462,7 +463,7 @@ def test_get_scorecard(trained_model, catboost_pool):
 
 def test_get_feature_importance(trained_model, catboost_pool):
     """Test getting feature importance."""
-    constructor = CatBoostScorecardConstructor()
+    constructor = CBScorecardConstructor()
     constructor.fit(trained_model, catboost_pool)
 
     importance = constructor.get_feature_importance()
@@ -474,7 +475,7 @@ def test_get_feature_importance(trained_model, catboost_pool):
 
 def test_predict(trained_model, catboost_pool, sample_data):
     """Test making predictions."""
-    constructor = CatBoostScorecardConstructor()
+    constructor = CBScorecardConstructor()
     constructor.fit(trained_model, catboost_pool)
 
     X, _ = sample_data
@@ -491,7 +492,7 @@ def test_predict(trained_model, catboost_pool, sample_data):
 
 def test_transform(trained_model, catboost_pool, sample_data):
     """Test transforming features."""
-    constructor = CatBoostScorecardConstructor()
+    constructor = CBScorecardConstructor()
     constructor.fit(trained_model, catboost_pool)
 
     X, _ = sample_data
@@ -510,7 +511,7 @@ def test_transform(trained_model, catboost_pool, sample_data):
 
 def test_create_scorecard(trained_model, catboost_pool):
     """Test creating a detailed scorecard."""
-    constructor = CatBoostScorecardConstructor()
+    constructor = CBScorecardConstructor()
     constructor.fit(trained_model, catboost_pool)
 
     # Test without PDO parameters
@@ -528,7 +529,7 @@ def test_create_scorecard(trained_model, catboost_pool):
 
 def test_get_binned_feature_table(trained_model, catboost_pool):
     """Test getting binned feature table."""
-    constructor = CatBoostScorecardConstructor()
+    constructor = CBScorecardConstructor()
     constructor.fit(trained_model, catboost_pool)
 
     binned_table = constructor.get_binned_feature_table()
@@ -541,7 +542,7 @@ def test_get_binned_feature_table(trained_model, catboost_pool):
 
 def test_plot_feature_importance(trained_model, catboost_pool):
     """Test plotting feature importance."""
-    constructor = CatBoostScorecardConstructor()
+    constructor = CBScorecardConstructor()
     constructor.fit(trained_model, catboost_pool)
 
     # Test with default parameters
@@ -553,7 +554,7 @@ def test_plot_feature_importance(trained_model, catboost_pool):
 
 def test_error_handling():
     """Test error handling for uninitialized constructor."""
-    constructor = CatBoostScorecardConstructor()
+    constructor = CBScorecardConstructor()
 
     with pytest.raises(ValueError, match="Scorecard not built yet"):
         constructor.get_scorecard()
@@ -595,7 +596,7 @@ def test_feature_importance_and_multiple_create_points(credit_data, credit_model
     model, pool = credit_model
 
     # Create and fit the scorecard constructor
-    constructor = CatBoostScorecardConstructor(model, pool)
+    constructor = CBScorecardConstructor(model, pool)
 
     # Construct scorecard
     scorecard = constructor.construct_scorecard()
@@ -707,7 +708,7 @@ def test_pdo_scoring_produces_varied_scores():
     model.fit(pool)
 
     # Create scorecard constructor and generate points
-    constructor = CatBoostScorecardConstructor(model, pool)
+    constructor = CBScorecardConstructor(model, pool)
     # scorecard = constructor.construct_scorecard()  # Not used in test
 
     # Create points

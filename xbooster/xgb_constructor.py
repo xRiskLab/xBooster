@@ -188,7 +188,8 @@ class XGBScorecardConstructor:
         if output_type == "leaf_index":
             # Predict leaf index
             tree_leaf_idx = self.booster_.predict(xgb_features, pred_leaf=True)
-            return pd.DataFrame(tree_leaf_idx, columns=_colnames)
+            # Convert to integer to match LightGBM behavior (7 instead of 7.0)
+            return pd.DataFrame(tree_leaf_idx, columns=_colnames).astype(int)
         tree_results = []
         for i in range(n_rounds):
             tree_leafs = (
@@ -196,8 +197,7 @@ class XGBScorecardConstructor:
                 - scores
             )
             tree_results.append(tree_leafs.flatten())
-        df_leafs = pd.DataFrame(np.column_stack(tree_results), index=X.index, columns=_colnames)
-        return df_leafs
+        return pd.DataFrame(np.column_stack(tree_results), index=X.index, columns=_colnames)
 
     def extract_leaf_weights(self) -> pd.DataFrame:
         """
@@ -652,7 +652,6 @@ class XGBScorecardConstructor:
         pdo: int = 50,
         target_points: int = 600,
         target_odds: int = 19,
-        intercept_based: bool = True,
     ) -> pd.DataFrame:
         """
         Predicts decomposed scores for a given dataset.
@@ -665,7 +664,6 @@ class XGBScorecardConstructor:
         - pdo: Points to Double the Odds (only used for method='shap')
         - target_points: Target score for reference odds (only used for method='shap')
         - target_odds: Reference odds ratio (only used for method='shap')
-        - intercept_based: If True, distribute intercept and offset across features (default: True)
 
         Returns:
         - pd.DataFrame: Decomposed scores (tree-level for default, feature-level for SHAP)
@@ -675,7 +673,7 @@ class XGBScorecardConstructor:
             pdo = self.pdo if self.pdo is not None else pdo
             target_points = self.target_points if self.target_points is not None else target_points
             target_odds = self.target_odds if self.target_odds is not None else target_odds
-            return self._predict_scores_shap(X, pdo, target_points, target_odds, intercept_based)
+            return self._predict_scores_shap(X, pdo, target_points, target_odds)
 
         # Default: use traditional scorecard-based approach (tree-level decomposition)
         return self._convert_tree_to_points(X)
@@ -686,17 +684,18 @@ class XGBScorecardConstructor:
         pdo: int = 50,
         target_points: int = 600,
         target_odds: int = 19,
-        intercept_based: bool = True,
     ) -> pd.DataFrame:
         """
         Predict decomposed scores using SHAP values (feature-level decomposition).
+
+        Uses intercept-based scoring where intercept and offset are distributed
+        evenly across features, ensuring feature scores sum to the total score.
 
         Args:
             X: Input features DataFrame
             pdo: Points to Double the Odds
             target_points: Target score for reference odds
             target_odds: Reference odds ratio
-            intercept_based: If True, distribute intercept and offset across features (default: True)
 
         Returns:
             DataFrame with feature-level score contributions and total score
@@ -720,7 +719,6 @@ class XGBScorecardConstructor:
             base_value=base_value,
             feature_names=X.columns.tolist(),
             scorecard_dict=scorecard_dict,
-            intercept_based=intercept_based,
         )
 
     @property

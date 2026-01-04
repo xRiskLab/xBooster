@@ -76,6 +76,7 @@ dev = [
     "pandas-stubs>=2.2.3",
     "prek>=0.2.0",
     "ty>=0.0.1a21",
+    "sourcery>=1.41.1",
 ]
 
 [tool.uv]
