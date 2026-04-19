@@ -9,29 +9,15 @@ The class provides methods for extracting leaf weights, constructing the
 scorecard, creating points, and predicting scores based on the constructed
 scorecard.
 
-Example usage:
-
-    import pandas as pd
-    from sklearn.metrics import roc_auc_score
-    import xgboost as xgb
-
-    # Instantiate the XGBScorecardConstructor
-    scorecard_constructor = XGBScorecardConstructor(
-        xgb_model, X.loc[ix_train], y.loc[ix_train]
-    )
-    # Generate a scorecard
-    scorecard_constructor.construct_scorecard()
-    xgb_scorecard_with_points = scorecard_constructor.create_points(
-        pdo=50, target_points=600, target_odds=50
-    )
-    # Make predictions using the scorecard
-    credit_scores = scorecard_constructor.predict_score(X.loc[ix_test])
-    gini = roc_auc_score(y.loc[ix_test], -credit_scores) * 2 - 1
-    print(f"Test Gini score: {gini:.2%}")
+Authors: Denis Burakov, Paul Edwards, Juan Antonio Montero de Espinosa
+Github: @deburky, @pedwardsada, @jmonteroers
+License: MIT
+This code is licensed under the MIT License.
+Copyright (c) 2025 xRiskLab
 """
 
 import json
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -40,6 +26,7 @@ from scipy.special import logit
 
 from ._parser import TreeParser
 from ._utils import calculate_information_value, calculate_weight_of_evidence
+from .shap_scorecard import compute_shap_scores, extract_shap_values_xgb
 
 
 class XGBScorecardConstructor:
@@ -75,7 +62,7 @@ class XGBScorecardConstructor:
     ```
     """
 
-    def __init__(self, model, X, y):  # pylint: disable=R0913, C0103
+    def __init__(self, model, X, y, n_base_trees=None):  # pylint: disable=R0913, C0103
         if not isinstance(model, xgb.XGBClassifier):
             raise TypeError("model must be an instance of xgboost.XGBClassifier")
         self.model = model
@@ -94,8 +81,32 @@ class XGBScorecardConstructor:
         self.precision_points = None
         self.score_type = None
         self._sql_query = None
+
+        # Fine-tuning awareness
+        if n_base_trees is not None:
+            total_trees = self.booster_.num_boosted_rounds()
+            if n_base_trees > total_trees:
+                raise ValueError(
+                    f"n_base_trees ({n_base_trees}) exceeds total trees ({total_trees})"
+                )
+        self.n_base_trees = n_base_trees
+
         if self.max_depth > 1:
             self.extract_decision_nodes()
+
+    @classmethod
+    def from_finetune_result(cls, result, X, y):
+        """Create constructor from a FineTuneResult.
+
+        Args:
+            result: FineTuneResult from finetune_xgb().
+            X: Training/fine-tuning features.
+            y: Training/fine-tuning labels.
+
+        Returns:
+            XGBScorecardConstructor with n_base_trees set.
+        """
+        return cls(result.model, X, y, n_base_trees=result.n_base_trees)
 
     def extract_model_param(self, param):
         """
@@ -194,6 +205,13 @@ class XGBScorecardConstructor:
         https://arxiv.org/pdf/2304.13761.pdf
         """
 
+        # Validate features
+        expected_features = self.booster_.feature_names
+        if expected_features is not None:
+            missing = set(expected_features) - set(X.columns)
+            if missing:
+                raise ValueError(f"Input X is missing features the model expects: {missing}")
+
         n_rounds = self.booster_.num_boosted_rounds()
         scores = np.full((X.shape[0],), self.base_score)  # pylint: disable=C0103
         xgb_features = xgb.DMatrix(X, base_margin=scores)  # pylint: disable=C0103
@@ -201,17 +219,16 @@ class XGBScorecardConstructor:
         if output_type == "leaf_index":
             # Predict leaf index
             tree_leaf_idx = self.booster_.predict(xgb_features, pred_leaf=True)
-            return pd.DataFrame(tree_leaf_idx, columns=_colnames)
-
-        df_leafs = pd.DataFrame()
+            # Convert to integer to match LightGBM behavior (7 instead of 7.0)
+            return pd.DataFrame(tree_leaf_idx, columns=_colnames).astype(int)
+        tree_results = []
         for i in range(n_rounds):
-            # Predict margin
             tree_leafs = (
                 self.booster_.predict(xgb_features, iteration_range=(i, i + 1), output_margin=True)
                 - scores
             )
-            df_leafs[f"tree_{i}"] = tree_leafs.flatten()
-        return df_leafs
+            tree_results.append(tree_leafs.flatten())
+        return pd.DataFrame(np.column_stack(tree_results), index=X.index, columns=_colnames)
 
     def extract_leaf_weights(self) -> pd.DataFrame:
         """
@@ -335,7 +352,6 @@ class XGBScorecardConstructor:
         n_rounds = self.booster_.num_boosted_rounds()
         labels = xgb_features_and_labels.get_label()
 
-        df_binning_table = pd.DataFrame()
         # TODO: Refactor this part to re-use the get_leafs method in the future
         # Summing margins from a booster, adopted from here:
         # https://xgboost.readthedocs.io/en/latest/python/examples/individual_trees.html
@@ -346,57 +362,33 @@ class XGBScorecardConstructor:
                 f"Invalid leaf index shape {tree_leaf_idx.shape}. Expected {(len(labels), n_rounds)}"
             )
 
-        for i in range(n_rounds):
-            # Get counts of events and non-events
-            index_and_label = pd.concat(
-                [
-                    pd.Series(tree_leaf_idx[:, i], name="leaf_idx"),
-                    pd.Series(labels, name="label"),
-                ],
-                axis=1,
-            )
-            # Create a binning table
-            binning_table = (
-                index_and_label.groupby("leaf_idx").agg(["sum", "count"]).reset_index()
-            ).astype(float)
-            binning_table.columns = ["leaf_idx", "Events", "Count"]  # type: ignore
-            binning_table["tree"] = i
-            binning_table["NonEvents"] = binning_table["Count"] - binning_table["Events"]
-            binning_table["EventRate"] = binning_table["Events"] / binning_table["Count"]
-            binning_table = binning_table[
-                ["tree", "leaf_idx", "Events", "NonEvents", "Count", "EventRate"]
-            ]
-            # Aggregate indices, leafs, and counts of events and non-events
-            df_binning_table = pd.concat([df_binning_table, binning_table], axis=0)
+        tree_leaf_idx_long = pd.DataFrame(tree_leaf_idx).melt(var_name="Tree", value_name="Node")
+        tree_leaf_idx_long["label"] = np.tile(labels, tree_leaf_idx.shape[1])
+        binning_table = (
+            tree_leaf_idx_long.groupby(["Tree", "Node"])["label"]
+            .agg(["sum", "count"])
+            .reset_index()
+        )
+        binning_table.columns = pd.Index(["Tree", "Node", "Events", "Count"])
+        df_binning_table = binning_table.assign(
+            NonEvents=lambda df: df["Count"] - df["Events"],
+            EventRate=lambda df: df["Events"] / df["Count"],
+        )[["Tree", "Node", "Events", "NonEvents", "Count", "EventRate"]]
+
         # Extract leaf weights (XAddEvidence)
         df_x_add_evidence = self.extract_leaf_weights()
 
         self.xgb_scorecard = df_x_add_evidence.merge(
             df_binning_table,
-            left_on=["Tree", "Node"],
-            right_on=["tree", "leaf_idx"],
+            on=["Tree", "Node"],
             how="left",
-        ).drop(["tree", "leaf_idx"], axis=1)
-
-        self.xgb_scorecard = self.xgb_scorecard[
-            [
-                "Tree",
-                "Node",
-                "Feature",
-                "Sign",
-                "Split",
-                "Count",
-                "NonEvents",
-                "Events",
-                "EventRate",
-                "XAddEvidence",
-            ]
-        ]
+        )
 
         # Sort by Tree and Node
         self.xgb_scorecard = self.xgb_scorecard.sort_values(by=["Tree", "Node"]).reset_index(
             drop=True
         )
+
         # Get WOE and IV scores
         self.xgb_scorecard["WOE"] = calculate_weight_of_evidence(self.xgb_scorecard)["WOE"]
         self.xgb_scorecard["IV"] = calculate_information_value(self.xgb_scorecard)["IV"]
@@ -409,26 +401,67 @@ class XGBScorecardConstructor:
         # Retrieve a detailed split
         self.xgb_scorecard = self.add_detailed_split(dataframe=self.xgb_scorecard)
 
-        self.xgb_scorecard = self.xgb_scorecard[
-            [
-                "Tree",
-                "Node",
-                "Feature",
-                "Sign",
-                "Split",
-                "Count",
-                "CountPct",
-                "NonEvents",
-                "Events",
-                "EventRate",
-                "WOE",
-                "IV",
-                "XAddEvidence",
-                "DetailedSplit",
-            ]
-        ]
+        # Add TreeSource column for fine-tuned models
+        if self.n_base_trees is not None:
+            self.xgb_scorecard["TreeSource"] = np.where(
+                self.xgb_scorecard["Tree"] < self.n_base_trees, "base", "finetuned"
+            )
 
-        return self.xgb_scorecard
+        # Build column list
+        base_columns = [
+            "Tree",
+            "Node",
+            "Feature",
+            "Sign",
+            "Split",
+            "Count",
+            "CountPct",
+            "NonEvents",
+            "Events",
+            "EventRate",
+            "WOE",
+            "IV",
+            "XAddEvidence",
+            "DetailedSplit",
+        ]
+        if self.n_base_trees is not None:
+            base_columns.append("TreeSource")
+
+        return self.xgb_scorecard[base_columns]
+
+    def summarize_score_sources(self) -> pd.DataFrame:
+        """Summarize IV contribution split between base and fine-tuned trees.
+
+        Returns:
+            DataFrame with columns: Feature, BaseIV, FinetunedIV, TotalIV
+
+        Raises:
+            ValueError: If n_base_trees is not set or scorecard not constructed.
+        """
+        if self.n_base_trees is None:
+            raise ValueError(
+                "n_base_trees is not set. Use n_base_trees parameter or from_finetune_result()."
+            )
+        if self.xgb_scorecard is None:
+            raise ValueError("Scorecard not constructed yet. Call construct_scorecard() first.")
+        if "TreeSource" not in self.xgb_scorecard.columns:
+            raise ValueError(
+                "TreeSource column not found. Reconstruct scorecard with n_base_trees set."
+            )
+
+        grouped = (
+            self.xgb_scorecard.groupby(["TreeSource", "Feature"])["IV"]
+            .sum()
+            .unstack(level=0, fill_value=0)
+        )
+        result = pd.DataFrame(
+            {
+                "BaseIV": grouped.get("base", 0),
+                "FinetunedIV": grouped.get("finetuned", 0),
+            }
+        )
+        result["TotalIV"] = result["BaseIV"] + result["FinetunedIV"]
+        return result.reset_index().rename(columns={"index": "Feature"})
 
     def create_points(  # pylint: disable=R0913
         self,
@@ -459,6 +492,7 @@ class XGBScorecardConstructor:
         Options:
             - 'XAddEvidence': Uses XGBoost's log-odds score (leaf weight or margin).
             - 'WOE': Uses Weight-of-Evidence (WOE) score (Experimental).
+            - 'SHAP': Uses SHAP values aggregated per leaf (Alpha - for depth>1 models).
 
         scorecard: pd.DataFrame, optional
             An external scorecard to use for creating points, by default None.
@@ -470,6 +504,11 @@ class XGBScorecardConstructor:
         For WOE score type, individual WOE scores are adjusted by the learning rate
         and divided by the maximum number of nodes per tree to make them more
         similar to the range of XAddEvidence scores.
+
+        For SHAP score type (Alpha), SHAP values are aggregated per leaf using
+        weighted average. This is particularly useful for models with max_depth > 1
+        where interpretability becomes challenging. SHAP values provide feature
+        attribution that accounts for feature interactions.
 
         References:
         NVIDIA GTC Talk "Machine Learning in Retail Credit Risk" by Paul Edwards.
@@ -493,29 +532,38 @@ class XGBScorecardConstructor:
             self.score_type = score_type
 
         if score_type not in {"XAddEvidence", "WOE"}:
-            raise ValueError("constructor.py: score must be one of 'XAddEvidence' or 'WOE'")
+            raise ValueError(
+                "constructor.py: score must be one of 'XAddEvidence' or 'WOE'. "
+                "For SHAP-based scoring, use predict_score(method='shap') instead."
+            )
         try:
             if self.xgb_scorecard is None:
                 raise ValueError("xgb_scorecard is None and dataframe is None.")
-            # If we use score_type == 'WOE', we need to calculate the initial
-            # odds, O(H)
-            base_score = (
-                self.y.mean() / (1 - self.y.mean()) if score_type == "WOE" else self.base_score
-            )
-            scdf = (
-                self.xgb_scorecard.copy()
-                .assign(
-                    Score=np.where(
-                        score_type == "XAddEvidence",
-                        self.xgb_scorecard.XAddEvidence,
-                        (
-                            (self.xgb_scorecard.WOE * self.learning_rate)
-                            # TODO: Make adjustable in the future
-                            / self.xgb_scorecard["Node"].max()
-                        ),
-                    )
+            # Get base score based on score_type
+            if score_type == "SHAP":
+                raise ValueError(
+                    "SHAP score_type is no longer supported in create_points(). "
+                    "Use predict_score(method='shap') instead."
                 )
-                .assign(base_score=base_score)  # pylint: disable=E1101
+            elif score_type == "WOE":
+                # For WOE, use average event rate
+                base_score = self.y.mean() / (1 - self.y.mean())
+                score_col = (
+                    (self.xgb_scorecard.WOE * self.learning_rate)
+                    # TODO: Make adjustable in the future
+                    / self.xgb_scorecard["Node"].max()
+                )
+            elif score_type == "XAddEvidence":
+                # For XAddEvidence, use model's base_score
+                base_score = self.base_score
+                score_col = self.xgb_scorecard.XAddEvidence
+            else:
+                # For XAddEvidence, use model's base_score
+                base_score = self.base_score
+                raise ValueError(f"Unknown score_type: {score_type}")
+
+            scdf = (
+                self.xgb_scorecard.copy().assign(Score=score_col).assign(base_score=base_score)  # pylint: disable=E1101
             )
         except KeyError as e:
             raise ValueError(f"Invalid columns in xgb_scorecard: {e}") from e
@@ -523,11 +571,10 @@ class XGBScorecardConstructor:
         factor = pdo / np.log(2)
         offset = target_points - factor * np.log(target_odds)
 
-        scdf["ScaledScore"] = factor * scdf.Score + logit(scdf.base_score)
-
+        # Scale scores with base_score adjustment
         if score_type == "XAddEvidence":
             scdf["ScaledScore"] = factor * scdf.Score + logit(scdf.base_score)
-        else:
+        else:  # WOE
             scdf["ScaledScore"] = factor * scdf.Score
 
         # Set the index to the Tree number
@@ -566,49 +613,193 @@ class XGBScorecardConstructor:
             pd.DataFrame: The DataFrame containing scores per tree and the total score.
 
         """
+        if self.xgb_scorecard_with_points is None:
+            raise ValueError(
+                "No scorecard with points has been created yet. Call create_points() first."
+            )
         X_leaf_weights = self.get_leafs(X, output_type="leaf_index")  # pylint: disable=C0103
-        result = pd.DataFrame()
-        for col in X_leaf_weights.columns:
-            tree_number = col.split("_")[1]
-            if self.xgb_scorecard_with_points is not None:
-                subset_points_df = self.xgb_scorecard_with_points[
-                    self.xgb_scorecard_with_points["Tree"] == int(tree_number)
-                ].copy()
-                merged_df = pd.merge(
-                    X_leaf_weights[[col]].round(4),
-                    subset_points_df[["Node", "Points"]],
-                    left_on=col,
-                    right_on="Node",
-                    how="left",
-                )
-                result[f"Score_{tree_number}"] = merged_df["Points"]
-        result = pd.concat([result, result.sum(axis=1).rename("Score")], axis=1)
+        n_samples, n_rounds = X_leaf_weights.shape
+        points_matrix = np.zeros((n_samples, n_rounds))
+        leaf_idx_values = X_leaf_weights.values
+        for t in range(n_rounds):
+            # Get points for this tree
+            tree_points = self.xgb_scorecard_with_points[
+                self.xgb_scorecard_with_points["Tree"] == t
+            ]
+            # Mapping dictionary instead of merge
+            mapping_dict = dict(zip(tree_points["Node"], tree_points["Points"]))
+            points_matrix[:, t] = pd.Series(leaf_idx_values[:, t]).map(mapping_dict).to_numpy()
+
+        result = pd.DataFrame(
+            points_matrix, index=X.index, columns=[f"Score_{i}" for i in range(n_rounds)]
+        )
+        # Add total score
+        result["Score"] = points_matrix.sum(axis=1)
         return result
 
-    def predict_score(self, X: pd.DataFrame) -> pd.Series:  # pylint: disable=C0103
+    def predict_score(
+        self,
+        X: pd.DataFrame,  # pylint: disable=C0103
+        method: Optional[str] = None,
+        pdo: int = 50,
+        target_points: int = 600,
+        target_odds: int = 19,
+    ) -> pd.Series:
         """
         Predicts the score for a given dataset using the constructed scorecard.
 
         Parameters:
-        - X (pd.DataFrame): Features of the dataset.
+        - X: Features of the dataset.
+        - method: Scoring method to use:
+            - None (default): Use traditional scorecard-based approach (points lookup)
+            - 'shap': Use SHAP values directly (computes SHAP on-the-fly, no binning table)
+        - pdo: Points to Double the Odds (only used for method='shap')
+        - target_points: Target score for reference odds (only used for method='shap')
+        - target_odds: Reference odds ratio (only used for method='shap')
 
         Returns:
         - pd.Series: Predicted scores.
         """
+        if method == "shap":
+            # Use stored PDO parameters if available (from create_points), otherwise use provided/defaults
+            pdo = self.pdo if self.pdo is not None else pdo
+            target_points = self.target_points if self.target_points is not None else target_points
+            target_odds = self.target_odds if self.target_odds is not None else target_odds
+            return self._predict_score_shap(X, pdo, target_points, target_odds)
+
+        # Default: use traditional scorecard-based approach (points lookup)
+        # Auto-create points if not already created (for backward compatibility)
+        if self.xgb_scorecard_with_points is None:
+            self.create_points(pdo=pdo, target_points=target_points, target_odds=target_odds)
         points_df = self._convert_tree_to_points(X)
         return pd.Series(points_df["Score"], name="Score")
 
-    def predict_scores(self, X: pd.DataFrame) -> pd.DataFrame:  # pylint: disable=C0103
+    def _predict_score_shap(
+        self,
+        X: pd.DataFrame,  # pylint: disable=C0103
+        pdo: int = 50,
+        target_points: int = 600,
+        target_odds: int = 19,
+    ) -> pd.Series:
         """
-        Predicts the score for a given dataset using the constructed scorecard.
+        Predict scores using SHAP values directly (no binning table).
 
-        Parameters:
-        - X (pd.DataFrame): Features of the dataset.
+        Args:
+            X: Input features DataFrame
+            pdo: Points to Double the Odds
+            target_points: Target score for reference odds
+            target_odds: Reference odds ratio
 
         Returns:
-        - pd.Series: Predicted scores.
+            Series of predicted scores
         """
+        # Extract SHAP values for input features
+        shap_values_full = extract_shap_values_xgb(
+            self.model, X, self.base_score, self.enable_categorical
+        )  # Shape: (n_samples, n_features + 1)
+        shap_values = shap_values_full[:, :-1]  # Feature contributions
+        base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
+
+        # Validate feature count matches
+        if shap_values.shape[1] != len(X.columns):
+            raise ValueError(
+                f"Feature count mismatch: SHAP values have {shap_values.shape[1]} features, "
+                f"but X has {len(X.columns)} columns"
+            )
+
+        # Use the SHAP scorecard computation function
+        scorecard_dict: dict[str, float | int] = {
+            "pdo": pdo,
+            "target_points": target_points,
+            "target_odds": target_odds,
+        }
+
+        # Compute SHAP-based scores using the dedicated function
+        scorecard_df = compute_shap_scores(
+            shap_values=shap_values,
+            base_value=base_value,
+            feature_names=X.columns.tolist(),
+            scorecard_dict=scorecard_dict,
+        )
+
+        # Extract final scores
+        return scorecard_df["score"]
+
+    def predict_scores(
+        self,
+        X: pd.DataFrame,  # pylint: disable=C0103
+        method: Optional[str] = None,
+        pdo: int = 50,
+        target_points: int = 600,
+        target_odds: int = 19,
+    ) -> pd.DataFrame:
+        """
+        Predicts decomposed scores for a given dataset.
+
+        Parameters:
+        - X: Features of the dataset.
+        - method: Scoring method to use:
+            - None (default): Use traditional scorecard-based approach (tree-level decomposition)
+            - 'shap': Use SHAP values directly (feature-level decomposition)
+        - pdo: Points to Double the Odds (only used for method='shap')
+        - target_points: Target score for reference odds (only used for method='shap')
+        - target_odds: Reference odds ratio (only used for method='shap')
+
+        Returns:
+        - pd.DataFrame: Decomposed scores (tree-level for default, feature-level for SHAP)
+        """
+        if method == "shap":
+            # Use stored PDO parameters if available (from create_points), otherwise use provided/defaults
+            pdo = self.pdo if self.pdo is not None else pdo
+            target_points = self.target_points if self.target_points is not None else target_points
+            target_odds = self.target_odds if self.target_odds is not None else target_odds
+            return self._predict_scores_shap(X, pdo, target_points, target_odds)
+
+        # Default: use traditional scorecard-based approach (tree-level decomposition)
         return self._convert_tree_to_points(X)
+
+    def _predict_scores_shap(
+        self,
+        X: pd.DataFrame,  # pylint: disable=C0103
+        pdo: int = 50,
+        target_points: int = 600,
+        target_odds: int = 19,
+    ) -> pd.DataFrame:
+        """
+        Predict decomposed scores using SHAP values (feature-level decomposition).
+
+        Uses intercept-based scoring where intercept and offset are distributed
+        evenly across features, ensuring feature scores sum to the total score.
+
+        Args:
+            X: Input features DataFrame
+            pdo: Points to Double the Odds
+            target_points: Target score for reference odds
+            target_odds: Reference odds ratio
+
+        Returns:
+            DataFrame with feature-level score contributions and total score
+        """
+        # Extract SHAP values for input features
+        shap_values_full = extract_shap_values_xgb(
+            self.model, X, self.base_score, self.enable_categorical
+        )  # Shape: (n_samples, n_features + 1)
+        shap_values = shap_values_full[:, :-1]  # Feature contributions
+        base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
+
+        # Use the SHAP scorecard computation function
+        scorecard_dict: dict[str, float | int] = {
+            "pdo": pdo,
+            "target_points": target_points,
+            "target_odds": target_odds,
+        }
+
+        return compute_shap_scores(
+            shap_values=shap_values,
+            base_value=base_value,
+            feature_names=X.columns.tolist(),
+            scorecard_dict=scorecard_dict,
+        )
 
     @property
     def sql_query(self):
@@ -832,16 +1023,21 @@ class XGBScorecardConstructor:
         self.xgb_scorecard_intv["NonEvents"] = np.nan
         X_event = self.X.loc[self.y == 1]
         X_nonevent = self.X.loc[self.y == 0]
-        for bin in self.xgb_scorecard_intv.itertuples():
-            has_missing = "Missing" in bin.Bin
-            self.xgb_scorecard_intv.loc[bin.Index, "Count"] = query_count(
-                self.X, bin.Feature, bin.Left, bin.Right, has_missing
+        for row_item in self.xgb_scorecard_intv.itertuples():
+            row_bin2: Any = row_item
+            bin_str = str(row_bin2.Bin)
+            feat = str(row_bin2.Feature)
+            left = float(row_bin2.Left)
+            right = float(row_bin2.Right)
+            has_missing = "Missing" in bin_str
+            self.xgb_scorecard_intv.loc[row_bin2.Index, "Count"] = query_count(
+                self.X, feat, left, right, has_missing
             )
-            self.xgb_scorecard_intv.loc[bin.Index, "Events"] = query_count(
-                X_event, bin.Feature, bin.Left, bin.Right, has_missing
+            self.xgb_scorecard_intv.loc[row_bin2.Index, "Events"] = query_count(
+                X_event, feat, left, right, has_missing
             )
-            self.xgb_scorecard_intv.loc[bin.Index, "NonEvents"] = query_count(
-                X_nonevent, bin.Feature, bin.Left, bin.Right, has_missing
+            self.xgb_scorecard_intv.loc[row_bin2.Index, "NonEvents"] = query_count(
+                X_nonevent, feat, left, right, has_missing
             )
 
         # Add 'CountPct as proportion of total observations

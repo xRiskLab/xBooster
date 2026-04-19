@@ -3,48 +3,11 @@ explainer.py - XGBoost Scorecard Explainer
 
 This module provides utilities for interpretability of XGBoost models built for scoring purposes.
 
-Functions:
-    - build_interactions_splits(scorecard_constructor):
-        Build interactions splits dataframe from the xgb_scorecard_with_splits.
-        In this we perform aggregation of features for each split by assigning the same gain
-        to all features used in the split. For `max_depth > 1`, each split is a combination
-        of features and for `max_depth = 1`, each split is a single feature. This means
-        that what one sees in the final leaf node is not the only feature used for a split.
-
-    - plot_importance(scorecard_constructor=None, metric="Likelihood", **kwargs):
-        Calculates and plots the importance of features based on the XGBoost scorecard.
-        The 'Likelihood' metric is used as the default metric, while other metrics,
-        such as 'Points', 'NegLogLikelihood', 'IV', can be used as well.
-
-    - plot_local_importance(scorecard_constructor, X: pd.DataFrame, **kwargs):
-        Plot local importance based on the provided scorecard constructor and a sample,
-        which needs to be explained.
-
-    - plot_tree(scorecard_constructor, num_trees=0, **kwargs):
-        Plot tree visualization for the XGBoost model and show the metrics of interest.
-        TODOs: Available options are to be documented.
-
-    - plot_catboost_importance(scorecard_constructor: Optional[CatBoostScorecardConstructor] = None,
-                              metric: str = "XAddEvidence",
-                              normalize: bool = True,
-                              max_features: int = 20,
-                              fontfamily: Optional[str] = "Monospace",
-                              fontsize: Optional[int] = 12,
-                              dpi: Optional[int] = 100,
-                              title: Optional[str] = "Feature importance",
-                              **kwargs: Any) -> None:
-        Plot feature importance for CatBoost scorecard.
-
-        Args:
-            scorecard_constructor: CatBoostScorecardConstructor instance
-            metric: Metric to use for importance ('XAddEvidence', 'WOE', 'IV')
-            normalize: Whether to normalize the importance values
-            max_features: Maximum number of features to display (default: 20)
-            fontfamily: Font family for the plot
-            fontsize: Font size for the plot
-            dpi: DPI for the plot
-            title: Title for the plot
-            **kwargs: Additional arguments to pass to matplotlib
+Authors: Denis Burakov
+Github: @deburky
+License: MIT
+This code is licensed under the MIT License.
+Copyright (c) 2025 xRiskLab
 """
 
 import re
@@ -57,15 +20,18 @@ from matplotlib.patches import FancyBboxPatch, Patch
 from matplotlib.ticker import MultipleLocator
 
 from ._utils import calculate_information_value, calculate_likelihood, calculate_odds
-from .cb_constructor import CatBoostScorecardConstructor
+from .cb_constructor import CBScorecardConstructor
 from .xgb_constructor import XGBScorecardConstructor
+
+# Backward compatibility alias
+CatBoostScorecardConstructor = CBScorecardConstructor
 
 
 def extract_splits_info(features: str) -> List[Dict[str, Union[str, float]]]:
     """Extracts split information from the DetailedSplit feature."""
     splits_info = []
     features = re.sub(r"\s*or missing\s*,?\s*", ", ", features)  # NOTE: Missing values
-    feature_names = sorted(set(re.findall(r"\b([^\d\W]+)\b", features)))
+    feature_names = sorted(set[Any](re.findall(r"\b([^\d\W]+)\b", features)))
     for feature in feature_names:
         regex = re.compile(rf"\b{feature}\b\s*(?P<sign>[<>=]+)\s*(?P<value>[^,]+)")
         if match := regex.search(features):
@@ -101,7 +67,7 @@ def build_interactions_splits(  # pylint: disable=R0914
     Returns:
         pd.DataFrame: A dataframe with interactions splits.
     """
-    interactions_data = []
+    interactions_data: list[dict[str, Any]] = []
 
     if dataframe is None and scorecard_constructor is None:
         raise ValueError("Either 'scorecard_constructor' or 'dataframe' must be provided.")
@@ -129,7 +95,7 @@ def build_interactions_splits(  # pylint: disable=R0914
         # Find sign and value that corresponds to each feature in the split
         splits_info = []
         features = re.sub(r"\s*or missing\s*,?\s*", ", ", features)  # NOTE: Missing values
-        feature_names = sorted(set(re.findall(r"\b([^\d\W]+)\b", features)))
+        feature_names = sorted(set[Any](re.findall(r"\b([^\d\W]+)\b", features)))
 
         for feature in feature_names:
             regex = re.compile(rf"\b{feature}\b\s*(?P<sign>[<>=]+)\s*(?P<value>[^,]+)")
@@ -196,7 +162,7 @@ def split_and_count(  # pylint: disable=R0914
         ValueError: If dataframe is not provided.
         ValueError: If label_column is not provided.
     """
-    split_and_count_data = []
+    split_and_count_data: Any = []
 
     dataframe = (
         pd.concat([scorecard_constructor.X, scorecard_constructor.y], axis=1)  # type: ignore
@@ -266,7 +232,7 @@ def split_and_count(  # pylint: disable=R0914
 
 # pylint: disable=too-many-arguments, too-many-lines
 def plot_importance(
-    scorecard_constructor: Optional[XGBScorecardConstructor] = None,
+    scorecard_constructor: Optional[Any] = None,
     metric: str = "Likelihood",
     normalize: bool = True,
     method: Optional[str] = None,
@@ -303,7 +269,7 @@ def plot_importance(
         raise ValueError("scorecard_constructor must be provided.")
 
     # Check if CatBoost constructor is provided
-    if isinstance(scorecard_constructor, CatBoostScorecardConstructor):
+    if isinstance(scorecard_constructor, CBScorecardConstructor):
         raise NotImplementedError(
             "Plotting feature importance for CatBoost models is not implemented yet. "
             "Please use the constructor's built-in plotting method: constructor.plot_feature_importance()"
@@ -422,7 +388,7 @@ def plot_score_distribution(
         y_true = scorecard_constructor.y
         y_pred = scorecard_constructor.predict_score(scorecard_constructor.X)  # type: ignore
 
-    # type: ignore
+    assert y_true is not None and y_pred is not None
     if isinstance(y_true, pd.DataFrame) and y_true.shape[1].shape is None:
         raise ValueError("Must have two classes.")
 
@@ -647,10 +613,10 @@ class TreeVisualizer:
         precision: Optional[int] = None,
     ):
         self.scorecard_constructor: Optional[XGBScorecardConstructor] = None
-        self.tree_dump: Optional[Dict[str, Any]] = None
+        self.tree_dump: Any = None
         self.scorecard_frame: Optional[pd.DataFrame] = None
         self.metrics: List[str] = metrics if metrics is not None else []
-        self.precision: int = precision
+        self.precision: Optional[int] = precision
 
     # pylint: disable=too-many-locals, too-many-statements
     def parse_xgb_output(
@@ -670,16 +636,16 @@ class TreeVisualizer:
         """
         self.scorecard_constructor = scorecard_constructor
 
-        nodes = {}
+        nodes: Dict[str, Dict[str, Any]] = {}
         root_id = None
 
         if self.scorecard_constructor is None:
             raise ValueError("The scorecard constructor is not set.")
 
-        self.tree_dump = self.scorecard_constructor.model.get_booster().get_dump()[num_trees]
-        self.scorecard_frame = self.scorecard_constructor.xgb_scorecard_with_points.query(
-            f"Tree == {num_trees}"
-        )
+        self.tree_dump = str(self.scorecard_constructor.model.get_booster().get_dump()[num_trees])
+        scorecard_with_points = self.scorecard_constructor.xgb_scorecard_with_points
+        assert scorecard_with_points is not None
+        self.scorecard_frame = scorecard_with_points.query(f"Tree == {num_trees}")
 
         for line in self.tree_dump.split("\n"):
             line = line.strip()
@@ -711,21 +677,18 @@ class TreeVisualizer:
                         conditions,
                     )
 
-                    node_dict = {
+                    children: Dict[str, Any] = {}
+                    for branch, target in branches:
+                        if target != "" and branch != "missing":
+                            children[branch] = target.strip()
+
+                    node_dict: Dict[str, Any] = {
                         "name": feature,
                         "depth": depth,
-                        "children": {},
+                        "children": children,
                     }
 
-                    for branch, target in branches:
-                        if target != "" and branch != "missing":
-                            node_dict["children"][branch] = target.strip()
-
                     nodes[node_id] = node_dict
-
-                    for branch, target in branches:
-                        if target != "" and branch != "missing":
-                            node_dict["children"][branch] = target.strip()
 
                     nodes[node_id] = node_dict
 
@@ -767,7 +730,7 @@ class TreeVisualizer:
                 "depth": node["depth"],
             }
             if "children" in node:
-                aligned_children = {}
+                aligned_children: dict[str, Any] = {}
                 for branch, child_node in node["children"].items():
                     if isinstance(child_node, str):
                         aligned_children[branch] = child_node
@@ -776,6 +739,7 @@ class TreeVisualizer:
                 aligned_node["children"] = aligned_children
             return aligned_node
 
+        assert root_id is not None
         aligned_tree = align_format(_build_tree(root_id, 0))
         self.tree_dump = {"0": aligned_tree}
 
@@ -792,7 +756,7 @@ class TreeVisualizer:
         Raises:
             ValueError: If any of the required metrics are not found in the scorecard dataframe.
         """
-        if self.metrics is None:
+        if self.metrics is None or self.scorecard_frame is None:
             return None
         if missing_metrics := [
             metric for metric in self.metrics if metric not in self.scorecard_frame.columns
@@ -1028,7 +992,7 @@ class TreeVisualizer:
 
 
 def plot_catboost_importance(
-    scorecard_constructor: Optional[CatBoostScorecardConstructor] = None,
+    scorecard_constructor: Optional[CBScorecardConstructor] = None,
     metric: str = "XAddEvidence",
     normalize: bool = True,
     max_features: int = 20,
@@ -1042,7 +1006,7 @@ def plot_catboost_importance(
     Plot feature importance for CatBoost scorecard.
 
     Args:
-        scorecard_constructor: CatBoostScorecardConstructor instance
+        scorecard_constructor: CBScorecardConstructor instance
         metric: Metric to use for importance ('XAddEvidence', 'WOE', 'IV')
         normalize: Whether to normalize the importance values
         max_features: Maximum number of features to display (default: 20)

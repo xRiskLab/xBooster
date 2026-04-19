@@ -106,11 +106,11 @@ class TestExplainer(unittest.TestCase):
         # Test with CatBoost constructor (should raise NotImplementedError)
         from catboost import CatBoostClassifier
 
-        from xbooster.cb_constructor import CatBoostScorecardConstructor
+        from xbooster.cb_constructor import CBScorecardConstructor
 
         catboost_model = CatBoostClassifier(iterations=10, depth=3, verbose=0)
         catboost_model.fit(self.dataset[["feature1", "feature2"]], self.dataset["label"])
-        catboost_constructor = CatBoostScorecardConstructor(
+        catboost_constructor = CBScorecardConstructor(
             catboost_model, self.dataset[["feature1", "feature2"]], self.dataset["label"]
         )
 

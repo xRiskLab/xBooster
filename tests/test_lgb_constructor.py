@@ -184,7 +184,7 @@ def test_get_leafs_margin(trained_lgb_model, sample_data):
     raw_pred = trained_lgb_model.predict(X, raw_score=True)
     margin_sum = margins.sum(axis=1).values
 
-    assert np.allclose(margin_sum, raw_pred, rtol=1e-5)
+    assert np.allclose(np.asarray(margin_sum), raw_pred, rtol=1e-5)
 
 
 def test_construct_scorecard(trained_lgb_model, sample_data):
@@ -228,16 +228,16 @@ def test_two_tree_base_score_validation(sample_data):
     )
 
     # Verify: constructor's get_leafs returns same values
-    assert np.allclose(margins.iloc[:, 0].values, tree0_pred, rtol=1e-5), (
+    assert np.allclose(np.asarray(margins.iloc[:, 0].values), tree0_pred, rtol=1e-5), (
         "Tree 0 margin from get_leafs must match LightGBM API"
     )
-    assert np.allclose(margins.iloc[:, 1].values, tree1_pred, rtol=1e-5), (
+    assert np.allclose(np.asarray(margins.iloc[:, 1].values), tree1_pred, rtol=1e-5), (
         "Tree 1 margin from get_leafs must match LightGBM API"
     )
 
     # Verify: margins from get_leafs sum to total
     margin_sum = margins.sum(axis=1).values
-    assert np.allclose(margin_sum, raw_pred, rtol=1e-5), (
+    assert np.allclose(np.asarray(margin_sum), raw_pred, rtol=1e-5), (
         "Margins from get_leafs must sum to total raw prediction"
     )
 

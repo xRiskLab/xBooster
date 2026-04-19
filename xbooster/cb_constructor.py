@@ -1,6 +1,6 @@
 """
-CatBoost Scorecard Constructor
-=================================
+cb_constructor.py
+
 This module provides a high-level interface for working with CatBoost scorecards.
 It combines the functionality of CatBoostScorecard and CatBoostWOEMapper to provide
 a streamlined workflow for creating and using scorecards.
@@ -9,9 +9,10 @@ Author: Denis Burakov
 Github: @deburky
 License: MIT
 This code is licensed under the MIT License.
-Copyright (c) 2025 Denis Burakov
+Copyright (c) 2025 xRiskLab
 """
 
+import contextlib
 from typing import Any, Dict, Optional, Union
 
 import numpy as np
@@ -20,9 +21,10 @@ from catboost import CatBoostClassifier, Pool
 
 from xbooster.catboost_scorecard import CatBoostScorecard
 from xbooster.catboost_wrapper import CatBoostWOEMapper
+from xbooster.shap_scorecard import compute_shap_scores, extract_shap_values_cb
 
 
-class CatBoostScorecardConstructor:
+class CBScorecardConstructor:
     """
     A high-level interface for working with CatBoost scorecards.
     This class combines the functionality of CatBoostScorecard and CatBoostWOEMapper
@@ -32,23 +34,74 @@ class CatBoostScorecardConstructor:
     def __init__(
         self,
         model: Optional[CatBoostClassifier] = None,
-        pool: Optional[Pool] = None,
+        pool: Optional[Union[Pool, pd.DataFrame]] = None,
+        y: Optional[pd.Series] = None,
         use_woe: bool = False,
         points_column: Optional[str] = None,
+        n_base_trees: Optional[int] = None,
     ) -> None:
         """
         Initialize the scorecard constructor.
 
         Args:
             model: Trained CatBoostClassifier
-            pool: CatBoost Pool object used for training/validation
+            pool: CatBoost Pool object OR DataFrame (X) for training/validation.
+                  If DataFrame is provided, y must also be provided to create Pool automatically.
+            y: Labels (required if pool is a DataFrame)
             use_woe: If True, use WOE values; if False, use XAddEvidence (default: False)
             points_column: If provided, use this column for scoring
+            n_base_trees: Number of base trees (for fine-tuned models). If set,
+                a TreeSource column is added to the scorecard.
+
+        Examples:
+            # Using Pool object (original API)
+            constructor = CBScorecardConstructor(model, pool)
+
+            # Using X, y (consistent with XGBoost/LightGBM API)
+            constructor = CBScorecardConstructor(model, X_train, y_train)
         """
         self.model = model
-        self.pool = pool
         self.use_woe = use_woe
         self.points_column = points_column
+        self.pool: Any = None
+        self.X: Any = None
+        self.y: Any = None
+
+        # Fine-tuning awareness
+        if n_base_trees is not None and model is not None:
+            total_trees = model.tree_count_
+            if n_base_trees > total_trees:
+                raise ValueError(
+                    f"n_base_trees ({n_base_trees}) exceeds total trees ({total_trees})"
+                )
+        self.n_base_trees = n_base_trees
+
+        # Support both Pool object and (X, y) pattern for consistency with XGBoost/LightGBM
+        if isinstance(pool, pd.DataFrame) and y is not None:
+            # Create Pool from X and y (consistent with XGBoost/LightGBM API)
+            # Extract categorical features from model if available
+            cat_features = None
+            if self.model is not None:
+                with contextlib.suppress(AttributeError, RuntimeError):
+                    if cat_feature_indices := self.model.get_cat_feature_indices():
+                        cat_features = cat_feature_indices
+            self.pool = Pool(pool, y, cat_features=cat_features)
+            self.X = pool  # Store for get_leafs() method
+            self.y = y
+        elif isinstance(pool, Pool):
+            # Original API: Pool object provided
+            self.pool = pool
+            self.X = None  # Will be extracted from pool if needed
+            self.y = None
+        else:
+            # No pool provided (lazy initialization)
+            self.pool = pool
+            self.X = None
+            self.y = None
+
+        # Auto-build scorecard if both model and pool are provided
+        if self.model is not None and self.pool is not None:
+            self._build_scorecard()
         self.scorecard_df: Optional[pd.DataFrame] = None
         self.mapper: Optional[CatBoostWOEMapper] = None
         self.scorecard: Optional[pd.DataFrame] = None
@@ -67,6 +120,53 @@ class CatBoostScorecardConstructor:
         self.original_mapper: Optional[CatBoostWOEMapper] = None
         self.original_scorecard: Optional[pd.DataFrame] = None
         self.points_enabled = False
+
+    @classmethod
+    def from_finetune_result(cls, result, X, y, **kwargs):
+        """Create constructor from a FineTuneResult.
+
+        Args:
+            result: FineTuneResult from finetune_cb().
+            X: Training/fine-tuning features (pd.DataFrame).
+            y: Training/fine-tuning labels (pd.Series).
+            **kwargs: Additional arguments passed to CBScorecardConstructor.
+
+        Returns:
+            CBScorecardConstructor with n_base_trees set.
+        """
+        return cls(result.model, X, y, n_base_trees=result.n_base_trees, **kwargs)
+
+    def summarize_score_sources(self) -> pd.DataFrame:
+        """Summarize IV contribution split between base and fine-tuned trees.
+
+        Returns:
+            DataFrame with columns: Feature, BaseIV, FinetunedIV, TotalIV
+
+        Raises:
+            ValueError: If n_base_trees is not set or scorecard not constructed.
+        """
+        if self.n_base_trees is None:
+            raise ValueError(
+                "n_base_trees is not set. Use n_base_trees parameter or from_finetune_result()."
+            )
+
+        scorecard = self.construct_scorecard()
+        if "TreeSource" not in scorecard.columns:
+            raise ValueError(
+                "TreeSource column not found. Reconstruct scorecard with n_base_trees set."
+            )
+
+        grouped = (
+            scorecard.groupby(["TreeSource", "Feature"])["IV"].sum().unstack(level=0, fill_value=0)
+        )
+        result = pd.DataFrame(
+            {
+                "BaseIV": grouped.get("base", 0),
+                "FinetunedIV": grouped.get("finetuned", 0),
+            }
+        )
+        result["TotalIV"] = result["BaseIV"] + result["FinetunedIV"]
+        return result.reset_index().rename(columns={"index": "Feature"})
 
     def fit(self, model: CatBoostClassifier, pool: Pool) -> None:
         """
@@ -129,6 +229,7 @@ class CatBoostScorecardConstructor:
         """
         if self.scorecard_df is None:
             self._build_scorecard()
+        assert self.scorecard_df is not None
 
         scorecard = self.scorecard_df.copy()
 
@@ -143,24 +244,24 @@ class CatBoostScorecardConstructor:
                     # Extract feature name and split value
                     if " <= " in last_condition:
                         feature, value = last_condition.split(" <= ")
-                        scorecard.loc[idx, "Feature"] = feature.strip()
-                        scorecard.loc[idx, "Split"] = float(value.strip())
-                        scorecard.loc[idx, "Sign"] = "<="
+                        scorecard.at[idx, "Feature"] = feature.strip()
+                        scorecard.at[idx, "Split"] = float(value.strip())
+                        scorecard.at[idx, "Sign"] = "<="
                     elif " > " in last_condition:
                         feature, value = last_condition.split(" > ")
-                        scorecard.loc[idx, "Feature"] = feature.strip()
-                        scorecard.loc[idx, "Split"] = float(value.strip())
-                        scorecard.loc[idx, "Sign"] = ">"
+                        scorecard.at[idx, "Feature"] = feature.strip()
+                        scorecard.at[idx, "Split"] = float(value.strip())
+                        scorecard.at[idx, "Sign"] = ">"
                     elif " = " in last_condition:
                         feature, value = last_condition.split(" = ")
-                        scorecard.loc[idx, "Feature"] = feature.strip()
-                        scorecard.loc[idx, "Split"] = value.strip().strip("'\"")
-                        scorecard.loc[idx, "Sign"] = "="
+                        scorecard.at[idx, "Feature"] = feature.strip()
+                        scorecard.at[idx, "Split"] = value.strip().strip("'\"")
+                        scorecard.at[idx, "Sign"] = "="
                     elif " != " in last_condition:
                         feature, value = last_condition.split(" != ")
-                        scorecard.loc[idx, "Feature"] = feature.strip()
-                        scorecard.loc[idx, "Split"] = value.strip().strip("'\"")
-                        scorecard.loc[idx, "Sign"] = "!="
+                        scorecard.at[idx, "Feature"] = feature.strip()
+                        scorecard.at[idx, "Split"] = value.strip().strip("'\"")
+                        scorecard.at[idx, "Sign"] = "!="
 
         # Calculate average event rate
         total_events = scorecard["Events"].sum()
@@ -169,34 +270,44 @@ class CatBoostScorecardConstructor:
         clipped_event_rate = scorecard["EventRate"].clip(lower=1e-3, upper=1 - 1e-3)
 
         # Calculate WOE and IV
-        scorecard["WOE"] = np.log(
+        woe_raw = np.log(
             (clipped_event_rate / (1 - clipped_event_rate))
             / (avg_event_rate / (1 - avg_event_rate))
-        ).fillna(0)
+        )
+        scorecard["WOE"] = pd.Series(woe_raw).fillna(0).values
         scorecard["IV"] = (scorecard["EventRate"] - avg_event_rate) * scorecard["WOE"]
 
         # Calculate CountPct
         scorecard["CountPct"] = (scorecard["Count"] / total_count).fillna(0.0)
 
-        # Return only the basic columns
-        return scorecard[
-            [
-                "Tree",
-                "LeafIndex",
-                "Feature",
-                "Sign",
-                "Split",
-                "CountPct",
-                "Count",
-                "NonEvents",
-                "Events",
-                "EventRate",
-                "XAddEvidence",
-                "WOE",
-                "IV",
-                "DetailedSplit",
-            ]
+        # Add TreeSource column for fine-tuned models
+        if self.n_base_trees is not None:
+            scorecard["TreeSource"] = np.where(
+                scorecard["Tree"] < self.n_base_trees, "base", "finetuned"
+            )
+
+        # Build column list
+        base_columns = [
+            "Tree",
+            "LeafIndex",
+            "Feature",
+            "Sign",
+            "Split",
+            "CountPct",
+            "Count",
+            "NonEvents",
+            "Events",
+            "EventRate",
+            "XAddEvidence",
+            "WOE",
+            "IV",
+            "DetailedSplit",
         ]
+        if self.n_base_trees is not None:
+            base_columns.append("TreeSource")
+
+        # Return only the basic columns
+        return scorecard[base_columns]
 
     def get_scorecard(self) -> pd.DataFrame:
         """
@@ -208,6 +319,46 @@ class CatBoostScorecardConstructor:
         if self.scorecard_df is None:
             raise ValueError("Scorecard not built yet. Call fit() first.")
         return self.scorecard_df
+
+    def get_leafs(
+        self,
+        X: pd.DataFrame,  # pylint: disable=C0103
+        output_type: str = "leaf_index",
+    ) -> pd.DataFrame:
+        """
+        Get leaf indices for a new dataset.
+
+        Args:
+            X: Input features DataFrame
+            output_type: 'leaf_index' (only supported type for CatBoost)
+
+        Returns:
+            DataFrame with columns [tree_0, tree_1, ..., tree_n] containing leaf indices
+
+        Note:
+            CatBoost uses calc_leaf_indexes() which returns integer leaf indices.
+            The 'margin' output_type is not supported for CatBoost.
+        """
+        if self.model is None:
+            raise ValueError("Model must be set before calling get_leafs()")
+
+        if output_type != "leaf_index":
+            raise ValueError(f"CatBoost only supports output_type='leaf_index'. Got: {output_type}")
+
+        # Create Pool from X (no labels needed for leaf prediction)
+        # Extract categorical features from model if available
+        cat_features = None
+        with contextlib.suppress(AttributeError, RuntimeError):
+            if cat_feature_indices := self.model.get_cat_feature_indices():
+                cat_features = cat_feature_indices
+        pool = Pool(X, cat_features=cat_features)
+        leaf_indices = self.model.calc_leaf_indexes(pool)
+
+        n_trees = leaf_indices.shape[1]
+        _colnames = [f"tree_{i}" for i in range(n_trees)]
+
+        # Return as integer DataFrame (matching XGBoost/LightGBM behavior)
+        return pd.DataFrame(leaf_indices, columns=_colnames).astype(int)
 
     def get_feature_importance(self) -> Dict[str, float]:
         """
@@ -221,21 +372,48 @@ class CatBoostScorecardConstructor:
         return self.mapper.feature_importance
 
     def predict_score(
-        self, features: Union[pd.DataFrame, Dict[str, Any]], method: str = "raw"
-    ) -> Union[float, np.ndarray]:
+        self,
+        features: Union[pd.DataFrame, Dict[str, Any]],
+        method: Optional[str] = None,
+        pdo: float = 50,
+        target_points: float = 600,
+        target_odds: float = 19,
+    ) -> Any:
         """
         Predict scores using the specified method.
 
         Args:
             features: DataFrame or dictionary of feature values
             method: Scoring method to use:
-                - 'raw': Use original XAddEvidence
-                - 'woe': Use Weight of Evidence values
-                - 'pdo': Use points-based scoring
+                - None (default): Use traditional points-based scoring (scorecard-based)
+                - 'raw': Use original XAddEvidence (scorecard-based)
+                - 'woe': Use Weight of Evidence values (scorecard-based)
+                - 'shap': Use SHAP values directly (computes SHAP on-the-fly, no binning table)
+            pdo: Points to Double the Odds (only used for method='shap')
+            target_points: Target score for reference odds (only used for method='shap')
+            target_odds: Reference odds ratio (only used for method='shap')
 
         Returns:
             Series containing predicted scores
         """
+        # Convert dict to DataFrame if needed
+        if isinstance(features, dict):
+            features = pd.DataFrame([features])
+
+        # Handle SHAP method separately (no binning table needed)
+        if method == "shap":
+            # Use stored PDO parameters if available (from create_points), otherwise use provided/defaults
+            if self.pdo_params is not None:
+                pdo = self.pdo_params.get("pdo", pdo)
+                target_points = self.pdo_params.get("target_points", target_points)
+                target_odds = self.pdo_params.get("target_odds", target_odds)
+            return self._predict_score_shap(features, pdo, target_points, target_odds)
+
+        # Default to traditional points-based scoring if method is None
+        if method is None:
+            method = "pdo"
+
+        # For other methods, use existing scorecard-based approach
         if self.mapper is None:
             raise ValueError("Mapper not initialized. Call fit() first.")
 
@@ -249,26 +427,95 @@ class CatBoostScorecardConstructor:
 
         if method == "raw" or method == "woe":
             # Use original mapper for raw and woe methods if available
-            original_mapper = self.original_mapper if self.points_enabled else self.mapper
+            active_mapper = self.original_mapper if self.points_enabled else self.mapper
+            assert active_mapper is not None
 
             # Set the appropriate value column based on method
             if method == "raw":
-                original_mapper.value_column = "XAddEvidence"
-                original_mapper.use_woe = False
+                active_mapper.value_column = "XAddEvidence"
+                active_mapper.use_woe = False
             else:
-                original_mapper.value_column = "WOE"
-                original_mapper.use_woe = True
+                active_mapper.value_column = "WOE"
+                active_mapper.use_woe = True
 
-            scores = original_mapper.predict_score(features)
+            scores = active_mapper.predict_score(features)
         elif method == "pdo":
             # Use current mapper for points method
             self.mapper.value_column = "Points"
             self.mapper.use_woe = False
             scores = self.mapper.predict_score(features)
         else:
-            raise ValueError(f"Unknown method: {method}")
+            raise ValueError(
+                f"Unknown method: {method}. Use None (default), 'raw', 'woe', or 'shap'."
+            )
 
         return pd.Series(scores) if isinstance(scores, (float, np.ndarray)) else scores
+
+    def _predict_score_shap(
+        self,
+        features: pd.DataFrame,
+        pdo: float = 50,
+        target_points: float = 600,
+        target_odds: float = 19,
+    ) -> pd.Series:
+        """
+        Predict scores using SHAP values directly (no binning table).
+
+        This method computes SHAP values on-the-fly for input features and scales them
+        using PDO formula. Different from scorecard-based methods which use pre-computed
+        binned values.
+
+        Args:
+            features: DataFrame of feature values
+            pdo: Points to Double the Odds
+            target_points: Target score for reference odds
+            target_odds: Reference odds ratio
+
+        Returns:
+            Series of predicted scores
+        """
+        if self.model is None:
+            raise ValueError("Model not set. Call fit() first.")
+
+        # Create Pool for CatBoost
+        # For prediction, we don't need labels, but Pool requires them
+        # Create dummy labels (will be ignored for SHAP computation)
+        dummy_labels = np.zeros(len(features))
+        pool = Pool(features, dummy_labels)
+
+        # Extract SHAP values for input features
+        shap_values_full = extract_shap_values_cb(
+            self.model, pool
+        )  # Shape: (n_samples, n_features + 1)
+        shap_values = shap_values_full[:, :-1]  # Feature contributions
+        base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
+
+        # Validate feature count matches
+        if shap_values.shape[1] != len(features.columns):
+            raise ValueError(
+                f"Feature count mismatch: SHAP values have {shap_values.shape[1]} features, "
+                f"but input has {len(features.columns)} columns"
+            )
+
+        # Use the SHAP scorecard computation function
+        scorecard_dict = {
+            "pdo": pdo,
+            "target_points": target_points,
+            "target_odds": target_odds,
+        }
+
+        # Compute SHAP-based scores using the dedicated function
+        scorecard_df = compute_shap_scores(
+            shap_values=shap_values,
+            base_value=base_value,
+            feature_names=features.columns.tolist(),
+            scorecard_dict=scorecard_dict,
+        )
+
+        # Extract final scores
+        scores = scorecard_df["score"]
+
+        return pd.Series(scores, name="Score")
 
     def transform(self, features: Union[pd.DataFrame, Dict[str, Any]]) -> pd.DataFrame:
         """
@@ -352,6 +599,7 @@ class CatBoostScorecardConstructor:
         target_points: float = 600,
         target_odds: float = 19,
         precision_points: int = 0,
+        score_type: str = "WOE",
     ) -> pd.DataFrame:
         """
         Create points for the scorecard using PDO (Points to Double the Odds) scaling.
@@ -373,11 +621,11 @@ class CatBoostScorecardConstructor:
         # First get the base scorecard
         scorecard = self.construct_scorecard().copy()
 
-        # Always use WOE for points calculation to ensure sufficient variance
-        value_col = "WOE"
-
-        # Base score from average event rate if available
+        # Select value column based on score_type
+        value_col = "XAddEvidence" if score_type == "XAddEvidence" else "WOE"
+        # Get base value based on score_type
         if "EventRate" in scorecard.columns:
+            # For WOE/XAddEvidence, use average event rate
             base_odds = scorecard["EventRate"].mean() / (1 - scorecard["EventRate"].mean())
         else:
             base_odds = target_odds  # fallback
@@ -386,11 +634,10 @@ class CatBoostScorecardConstructor:
         factor = pdo / np.log(2)
         offset = target_points - factor * np.log(base_odds)
 
-        # Raw contribution score from WOE or XAddEvidence
-        scorecard["RawScore"] = -factor * scorecard[value_col]
-
+        # Raw contribution score from selected value column
         n_trees = len(scorecard["Tree"].unique())
-        scorecard["RawScore"] = -factor * scorecard[value_col]
+        # Don't negate here - match XGBoost approach: negate in formula instead
+        scorecard["RawScore"] = factor * scorecard[value_col]
         scorecard["RawScore"] /= n_trees  # Normalize by number of trees
 
         # Align maximum score within each tree
@@ -399,8 +646,11 @@ class CatBoostScorecardConstructor:
         mean_shift = (tree_max.sum() - offset) / len(tree_max)
 
         # Calculate points using apply
+        # Match XGBoost formula: -ScaledScore + var_offsets - shft_base_pts
+        # So: -RawScore + tree_max - mean_shift
+        # This ensures higher XAddEvidence (higher risk) results in lower scores
         scorecard["Points"] = scorecard.apply(
-            lambda row: tree_max[row.name] - row["RawScore"] - mean_shift, axis=1
+            lambda row: -row["RawScore"] + tree_max[row.name] - mean_shift, axis=1
         )
         scorecard.reset_index(inplace=True)
 
@@ -429,23 +679,44 @@ class CatBoostScorecardConstructor:
 
         return scorecard
 
-    def predict_scores(self, features: Union[pd.DataFrame, Dict[str, Any]]) -> pd.DataFrame:
+    def predict_scores(
+        self,
+        features: Union[pd.DataFrame, Dict[str, Any]],
+        method: Optional[str] = None,
+        pdo: float = 50,
+        target_points: float = 600,
+        target_odds: float = 19,
+    ) -> pd.DataFrame:
         """
-        Predict scores for each tree and total score.
+        Predict decomposed scores for a given dataset.
 
         Args:
             features: Input features as DataFrame or dictionary
+            method: Scoring method to use:
+                - None (default): Use traditional scorecard-based approach (tree-level decomposition)
+                - 'shap': Use SHAP values directly (feature-level decomposition)
+            pdo: Points to Double the Odds (only used for method='shap')
+            target_points: Target score for reference odds (only used for method='shap')
+            target_odds: Reference odds ratio (only used for method='shap')
 
         Returns:
-            DataFrame with columns for each tree's score and total score
+            DataFrame with decomposed scores (tree-level for default, feature-level for SHAP)
         """
+        if method == "shap":
+            # Use stored PDO parameters if available (from create_points), otherwise use provided/defaults
+            if self.pdo_params is not None:
+                pdo = self.pdo_params.get("pdo", pdo)
+                target_points = self.pdo_params.get("target_points", target_points)
+                target_odds = self.pdo_params.get("target_odds", target_odds)
+            return self._predict_scores_shap(features, pdo, target_points, target_odds)
+
+        # Default: use traditional scorecard-based approach (tree-level decomposition)
         if self.mapper is None:
             raise ValueError("Mapper not initialized. Call fit() first.")
 
         # Get scores for each tree
         tree_scores = {}
         for tree_idx in self.tree_indices:
-            # tree_data = self.scorecard[self.scorecard["Tree"] == tree_idx]  # Not used
             if isinstance(features, dict):
                 features_df = pd.DataFrame([features])
             else:
@@ -458,6 +729,62 @@ class CatBoostScorecardConstructor:
         scores_df = pd.DataFrame(tree_scores)
         scores_df["Score"] = scores_df.sum(axis=1)
         return scores_df
+
+    def _predict_scores_shap(
+        self,
+        features: Union[pd.DataFrame, Dict[str, Any]],
+        pdo: float = 50,
+        target_points: float = 600,
+        target_odds: float = 19,
+    ) -> pd.DataFrame:
+        """
+        Predict decomposed scores using SHAP values (feature-level decomposition).
+
+        Uses intercept-based scoring where intercept and offset are distributed
+        evenly across features, ensuring feature scores sum to the total score.
+
+        Args:
+            features: Input features DataFrame or dictionary
+            pdo: Points to Double the Odds
+            target_points: Target score for reference odds
+            target_odds: Reference odds ratio
+
+        Returns:
+            DataFrame with feature-level score contributions and total score
+        """
+        if self.model is None:
+            raise ValueError("Model not set. Call fit() first.")
+
+        # Convert dict to DataFrame if needed
+        if isinstance(features, dict):
+            features_df = pd.DataFrame([features])
+        else:
+            features_df = features.copy()
+
+        # Create Pool for CatBoost
+        dummy_labels = np.zeros(len(features_df))
+        pool = Pool(features_df, dummy_labels)
+
+        # Extract SHAP values for input features
+        shap_values_full = extract_shap_values_cb(
+            self.model, pool
+        )  # Shape: (n_samples, n_features + 1)
+        shap_values = shap_values_full[:, :-1]  # Feature contributions
+        base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
+
+        # Use the SHAP scorecard computation function
+        scorecard_dict = {
+            "pdo": pdo,
+            "target_points": target_points,
+            "target_odds": target_odds,
+        }
+
+        return compute_shap_scores(
+            shap_values=shap_values,
+            base_value=base_value,
+            feature_names=features_df.columns.tolist(),
+            scorecard_dict=scorecard_dict,
+        )
 
     def generate_sql_query(self):
         """

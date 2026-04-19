@@ -2,6 +2,12 @@
 catboost_wrapper.py
 
 This module implements the inference functionality for CatBoost models.
+
+Author: Denis Burakov
+Github: @deburky
+License: MIT
+This code is licensed under the MIT License.
+Copyright (c) 2025 xRiskLab
 """
 
 import re
@@ -108,7 +114,7 @@ class CatBoostWOEMapper:
         Returns:
             Dictionary of feature mappings
         """
-        feature_mappings = defaultdict(
+        feature_mappings: Any = defaultdict(
             lambda: defaultdict(lambda: {"value": [], "weight": [], "trees": []})
         )
 
@@ -139,8 +145,8 @@ class CatBoostWOEMapper:
         """Aggregate values across trees for each feature condition."""
         for _, conditions in self.feature_mappings.items():
             for _, details in conditions.items():
-                weights = details["weight"]
-                values = details["value"]
+                weights: Any = details["weight"]
+                values: Any = details["value"]
                 total_weight = sum(weights)
                 if total_weight > 0:
                     weighted_avg = sum(v * w for v, w in zip(values, weights)) / total_weight
@@ -148,7 +154,8 @@ class CatBoostWOEMapper:
                     weighted_avg = sum(values) / len(values) if values else 0.0
                 details["agg_value"] = weighted_avg
                 details["total_weight"] = total_weight
-                details["tree_count"] = len(set(details["trees"]))
+                trees: Any = details["trees"]
+                details["tree_count"] = len(set(trees))
 
     def calculate_feature_importance(self) -> Dict[str, float]:
         """
@@ -519,7 +526,7 @@ class CatBoostWOEMapper:
         # Set the appropriate value column based on method
         original_value_column = self.value_column
         original_use_woe = self.use_woe
-        temp_scorecard = None
+        temp_scorecard: Any = None
 
         try:
             if method == "raw":
@@ -530,13 +537,14 @@ class CatBoostWOEMapper:
                 self.use_woe = True
             elif method == "pdo":
                 # Use the enhanced scorecard with Points column
-                if hasattr(self, "enhanced_scorecard"):
+                if hasattr(self, "enhanced_scorecard") and self.enhanced_scorecard is not None:
                     temp_scorecard = self.scorecard
                     self.scorecard = self.enhanced_scorecard
                 self.value_column = "Points"
                 self.use_woe = False
 
             # Make prediction using the appropriate method
+            scores: Any
             if isinstance(features, pd.DataFrame):
                 scores = self._predict_score_batch(features)
             else:
@@ -572,10 +580,11 @@ class CatBoostWOEMapper:
                 if not isinstance(conditions, str) or not np.any(unassigned):
                     continue
 
-                # Only process unassigned rows
-                subset = df.loc[unassigned_indices[unassigned]]
-                if len(subset) == 0:
+                # Only process unassigned rows (use iloc for position-based indexing)
+                unassigned_positions = unassigned_indices[unassigned]
+                if len(unassigned_positions) == 0:
                     continue
+                subset = df.iloc[unassigned_positions]
 
                 # Apply conditions directly to subset using pandas filtering
                 matches = np.ones(len(subset), dtype=bool)
@@ -589,6 +598,7 @@ class CatBoostWOEMapper:
 
                     # Apply appropriate filter based on condition type
                     try:
+                        value: Any
                         if " = " in condition:
                             value = condition.split(" = ")[1].strip("'\"")
                             condition_matches = subset[feature].astype(str) == value
@@ -613,12 +623,11 @@ class CatBoostWOEMapper:
                 if not valid_filter:
                     continue
 
-                # Get indices of matching rows in the original array
+                # Get positions of matching rows in the original array
                 if np.any(matches):
-                    matching_subset_indices = subset.index[matches]
-                    matching_positions = np.where(
-                        np.isin(unassigned_indices, matching_subset_indices)
-                    )[0]
+                    # Since we used iloc, matches correspond to positions in unassigned_positions
+                    matching_positions_in_subset = np.where(matches)[0]
+                    matching_positions = unassigned_positions[matching_positions_in_subset]
 
                     # Add the leaf value to matching rows
                     value = leaf[value_col]
@@ -641,14 +650,14 @@ class CatBoostWOEMapper:
                     else tree_data.index[0]
                 )
                 default_leaf = tree_data.loc[default_idx]
-                value = default_leaf[value_col]
+                default_value: Any = default_leaf[value_col]
                 if method == "raw":
                     # No normalization for raw method
                     pass
                 elif method == "woe" and len(self.tree_indices) > 0:
                     # For WOE, normalize by tree count
-                    value = value / len(self.tree_indices)
-                scores[unassigned_indices[unassigned]] += value
+                    default_value = default_value / len(self.tree_indices)
+                scores[unassigned_indices[unassigned]] += default_value
 
         return scores
 
@@ -688,24 +697,25 @@ class CatBoostWOEMapper:
 
                     # Evaluate condition based on type
                     try:
+                        cond_value: Any
                         if " = " in condition:
-                            value = condition.split(" = ")[1].strip("'\"")
-                            if str(feature_value) != value:
+                            cond_value = condition.split(" = ")[1].strip("'\"")
+                            if str(feature_value) != cond_value:
                                 conditions_met = False
                                 break
                         elif " != " in condition:
-                            value = condition.split(" != ")[1].strip("'\"")
-                            if str(feature_value) == value:
+                            cond_value = condition.split(" != ")[1].strip("'\"")
+                            if str(feature_value) == cond_value:
                                 conditions_met = False
                                 break
                         elif " <= " in condition:
-                            value = float(condition.split(" <= ")[1])
-                            if float(feature_value) > value:
+                            cond_value = float(condition.split(" <= ")[1])
+                            if float(feature_value) > cond_value:
                                 conditions_met = False
                                 break
                         elif " > " in condition:
-                            value = float(condition.split(" > ")[1])
-                            if float(feature_value) <= value:
+                            cond_value = float(condition.split(" > ")[1])
+                            if float(feature_value) <= cond_value:
                                 conditions_met = False
                                 break
                     except (ValueError, TypeError):
@@ -714,14 +724,14 @@ class CatBoostWOEMapper:
 
                 # If all conditions met, add this leaf's value to the score
                 if conditions_met:
-                    value = leaf[value_col]
+                    leaf_value: Any = leaf[value_col]
                     if method == "raw":
                         # No normalization for raw method
                         pass
                     elif method == "woe" and len(self.tree_indices) > 0:
                         # For WOE, normalize by tree count
-                        value = value / len(self.tree_indices)
-                    score += value
+                        leaf_value = leaf_value / len(self.tree_indices)
+                    score += leaf_value
                     assigned = True
                     break
 
@@ -732,13 +742,13 @@ class CatBoostWOEMapper:
                     if "Count" in tree_data.columns
                     else tree_data.index[0]
                 )
-                value = tree_data.loc[default_idx][value_col]
+                default_value: Any = tree_data.loc[default_idx][value_col]
                 if method == "raw":
                     # No normalization for raw method
                     pass
                 elif method == "woe" and len(self.tree_indices) > 0:
                     # For WOE, normalize by tree count
-                    value = value / len(self.tree_indices)
-                score += value
+                    default_value = default_value / len(self.tree_indices)
+                score += default_value
 
         return score

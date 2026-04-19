@@ -4,9 +4,7 @@ This module provides test cases for the constructor module, which serves as a un
 interface for importing scorecard constructors.
 """
 
-import pytest
-
-from xbooster.constructor import CatBoostScorecardConstructor, XGBScorecardConstructor
+from xbooster.constructor import CBScorecardConstructor, XGBScorecardConstructor
 
 
 def test_import_xgb_constructor():
@@ -19,12 +17,12 @@ def test_import_xgb_constructor():
 
 
 def test_import_cb_constructor():
-    """Test that CatBoostScorecardConstructor can be imported correctly."""
-    assert CatBoostScorecardConstructor is not None
-    assert hasattr(CatBoostScorecardConstructor, "__init__")
-    assert hasattr(CatBoostScorecardConstructor, "construct_scorecard")
-    assert hasattr(CatBoostScorecardConstructor, "create_points")
-    assert hasattr(CatBoostScorecardConstructor, "predict_score")
+    """Test that CBScorecardConstructor can be imported correctly."""
+    assert CBScorecardConstructor is not None
+    assert hasattr(CBScorecardConstructor, "__init__")
+    assert hasattr(CBScorecardConstructor, "construct_scorecard")
+    assert hasattr(CBScorecardConstructor, "create_points")
+    assert hasattr(CBScorecardConstructor, "predict_score")
 
 
 def test_invalid_attribute():
@@ -33,12 +31,10 @@ def test_invalid_attribute():
     This test intentionally tries to import a non-existent constructor
     to verify that the module raises the correct error.
     """
-    with pytest.raises(ImportError) as exc_info:
-        # This import is expected to fail - InvalidConstructor does not exist
-        from xbooster.constructor import InvalidConstructor  # type: ignore[attr-defined]  # noqa: F401
-    assert "cannot import name 'InvalidConstructor' from 'xbooster.constructor'" in str(
-        exc_info.value
-    )
+    import importlib
+
+    mod = importlib.import_module("xbooster.constructor")
+    assert not hasattr(mod, "InvalidConstructor")
 
 
 def test_constructor_all():
@@ -46,6 +42,12 @@ def test_constructor_all():
     from xbooster.constructor import __all__
 
     assert "XGBScorecardConstructor" in __all__
+    assert "CBScorecardConstructor" in __all__
+    # Backward compatibility
+    from xbooster.constructor import CatBoostScorecardConstructor
+
+    assert CatBoostScorecardConstructor is CBScorecardConstructor
     assert "CatBoostScorecardConstructor" in __all__
-    assert len(__all__) == 2
-    assert len(__all__) == 2
+    assert (
+        len(__all__) == 3
+    )  # XGBScorecardConstructor, CBScorecardConstructor, CatBoostScorecardConstructor

@@ -133,7 +133,7 @@ class TreeParser:
         Returns:
             The constructed condition string.
         """
-        query_list = []
+        query_list: list[str] = []
 
         def _recurse(x):
             """

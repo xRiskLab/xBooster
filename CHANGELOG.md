@@ -1,5 +1,87 @@
 # Changelog
 
+## [0.2.8] - 2026-04-19
+
+### Added
+- **Fine-Tuning Support**: New `finetuner` module for incremental model updates
+  - `finetune_xgb()`, `finetune_lgb()`, `finetune_cb()` helper functions
+  - `FineTuneResult` dataclass with tree counts and feature metadata
+  - Supports both same-feature continued training and expanded-feature warm-start
+  - `n_base_trees` parameter on all three constructors for fine-tuning awareness
+  - `from_finetune_result()` classmethod on all constructors
+  - `summarize_score_sources()` method for base vs. fine-tuned contribution analysis
+  - `TreeSource` column in scorecard output (base/finetuned)
+  - Example notebook: `examples/finetuning-getting-started.ipynb`
+
+- **SHAP Integration**: SHAP-based scoring for all three libraries
+  - **XGBoost**: Native SHAP extraction using `pred_contribs=True`
+  - **LightGBM**: Native SHAP extraction using `pred_contrib=True`
+  - **CatBoost**: Native SHAP extraction using `get_feature_importance(type='ShapValues')`
+  - New `method="shap"` option in `predict_score()` and `predict_scores()` methods
+  - Feature-level score decomposition via `predict_scores(method="shap")`
+  - No external dependencies required (uses native SHAP implementations)
+  - Dedicated `shap_scorecard.py` module with centralized extraction functions
+
+### Changed
+- **Type Checking**: Migrated from `ty` to `mypy` with strict type safety
+  - Created type stubs for xgboost, catboost in `typings/`
+  - Updated lightgbm and scipy type stubs
+  - All source files and tests pass mypy with zero `type: ignore` comments
+  - Added mypy hook to `.pre-commit-config.yaml`
+
+- **SHAP Module Refactoring**: Simplified SHAP API and module structure
+  - Simplified `compute_shap_scores()` to only require `shap_values`, `base_value`, and `feature_names`
+  - Module accessible via `from xbooster import shap` for cleaner imports
+  - SHAP computation is optional and only performed when `method="shap"` is used
+  - Removed SHAP column from scorecard binning tables (cleaner scorecard structure)
+
+- **XGBoost Leaf Index Format**: `get_leafs()` now returns integer leaf indices
+  - Leaf indices returned as integers (7) instead of floats (7.0)
+  - Matches LightGBM behavior for consistency across constructors
+
+### Performance Improvements
+- **XGBoost Constructor Optimization** (PR #14, @RektPunk): Vectorized `construct_scorecard()`
+- **LightGBM Constructor Optimizations** (PRs #10, #11, #13, @RektPunk):
+  - Vectorized `construct_scorecard()`, `_convert_tree_to_points()`, and `get_leafs()`
+  - All optimizations maintain backward compatibility and numerical equivalence
+
+### Fixed
+- **Package Distribution**: Excluded examples directory from sdist to reduce package size (~8.1MB reduction)
+
+### Technical Details
+- 144 tests passing (108 existing + 36 fine-tuning)
+- All three constructors support SHAP and fine-tuning: `XGBScorecardConstructor`, `LGBScorecardConstructor`, `CBScorecardConstructor`
+- Backward compatible: all existing APIs unchanged
+- Full mypy coverage with custom type stubs (no `type: ignore` suppression)
+
+## [0.2.8a1] - 2025-12-04 (Alpha)
+
+### Added
+- **SHAP Integration (Alpha)**: Added SHAP-based scoring for all three libraries
+  - **XGBoost**: Native SHAP extraction using `pred_contribs=True`
+  - **LightGBM**: Native SHAP extraction using `pred_contrib=True`
+  - **CatBoost**: Native SHAP extraction using `get_feature_importance(type='ShapValues')`
+  - New `method="shap"` option in `predict_score()` and `predict_scores()` methods
+  - SHAP values computed on-demand (not stored in scorecard binning table)
+  - Feature-level score decomposition via `predict_scores(method="shap")`
+  - Particularly useful for models with `max_depth > 1` where interpretability is challenging
+  - No external dependencies required (uses native SHAP implementations)
+
+### Changed
+- **SHAP Architecture Refactoring**: Moved all SHAP logic to dedicated `shap_scorecard.py` module
+  - SHAP extraction functions centralized: `extract_shap_values_xgb()`, `extract_shap_values_lgb()`, `extract_shap_values_cb()`
+  - SHAP computation is now optional and only performed when `method="shap"` is used
+  - Removed SHAP column from scorecard binning tables (cleaner scorecard structure)
+  - Simplified API: users don't need to import or call SHAP extraction functions directly
+
+### Technical Details
+- All three constructors now support SHAP: `XGBScorecardConstructor`, `LGBScorecardConstructor`, `CatBoostScorecardConstructor`
+- SHAP values computed using native library methods (no shap package dependency)
+- SHAP computation happens on-demand when `predict_score(method="shap")` or `predict_scores(method="shap")` is called
+- Backward compatible: traditional scorecard methods unchanged
+- Cleaner separation of concerns: scorecard construction vs. SHAP computation
+- Alpha release for testing and feedback
+
 ## [0.2.7] - 2025-12-04
 
 ### Changed

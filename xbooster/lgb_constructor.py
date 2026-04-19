@@ -12,32 +12,22 @@ The class provides methods for extracting leaf weights, constructing the
 scorecard, creating points, and predicting scores based on the constructed
 scorecard.
 
-Example usage (to be implemented):
+Authors: Denis Burakov, Sangjun Moon
+Github: @deburky, @RektPunk
+License: MIT
+This code is licensed under the MIT License.
+Copyright (c) 2025 xRiskLab
 
-    import pandas as pd
-    from sklearn.metrics import roc_auc_score
-    import lightgbm as lgb
-
-    # Instantiate the LGBScorecardConstructor
-    scorecard_constructor = LGBScorecardConstructor(
-        lgb_model, X.loc[ix_train], y.loc[ix_train]
-    )
-    # Generate a scorecard
-    scorecard_constructor.construct_scorecard()
-    lgb_scorecard_with_points = scorecard_constructor.create_points(
-        pdo=50, target_points=600, target_odds=50
-    )
-    # Make predictions using the scorecard
-    credit_scores = scorecard_constructor.predict_score(X.loc[ix_test])
-    gini = roc_auc_score(y.loc[ix_test], -credit_scores) * 2 - 1
-    print(f"Test Gini score: {gini:.2%}")
 """
+
+from typing import Optional
 
 import numpy as np
 import pandas as pd
 from lightgbm import LGBMClassifier
 
 from ._utils import calculate_information_value, calculate_weight_of_evidence
+from .shap_scorecard import compute_shap_scores, extract_shap_values_lgb
 
 # Note: These will be needed when implementing the methods:
 # from typing import Optional
@@ -82,7 +72,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
        model.predict(X, raw_score=True) returns margins
     """
 
-    def __init__(self, model, X, y):  # pylint: disable=C0103
+    def __init__(self, model, X, y, n_base_trees=None, base_score=None):  # pylint: disable=C0103
         """
         Initialize the LGBScorecardConstructor.
 
@@ -90,6 +80,11 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             model: Trained LightGBM classifier
             X: Training features
             y: Training labels
+            n_base_trees: Number of base trees (for fine-tuned models). If set,
+                a TreeSource column is added to the scorecard.
+            base_score: Override the base score. Useful for fine-tuned models where
+                the fine-tuning data has a different event rate than the original
+                training data.
         """
         if not isinstance(model, LGBMClassifier):
             raise TypeError("model must be an instance of lightgbm.LGBMClassifier")
@@ -114,7 +109,19 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         # - We subtract base_score from Tree 0 to normalize all trees to the same scale
         # - Then add logit(base_score) during scaling to distribute it across all trees
         # - This ensures each tree contributes proportionally to the final scorecard
-        self.base_score = np.log(y.mean() / (1 - y.mean()))
+        if base_score is not None:
+            self.base_score = base_score
+        else:
+            self.base_score = np.log(y.mean() / (1 - y.mean()))
+
+        # Fine-tuning awareness
+        if n_base_trees is not None:
+            total_trees = self.booster_.num_trees()
+            if n_base_trees > total_trees:
+                raise ValueError(
+                    f"n_base_trees ({n_base_trees}) exceeds total trees ({total_trees})"
+                )
+        self.n_base_trees = n_base_trees
 
         # Initialize scorecard storage
         self.lgb_scorecard = None
@@ -125,6 +132,21 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         self.precision_points = None
         self.score_type = None
         self._sql_query = None
+
+    @classmethod
+    def from_finetune_result(cls, result, X, y, base_score=None):
+        """Create constructor from a FineTuneResult.
+
+        Args:
+            result: FineTuneResult from finetune_lgb().
+            X: Training/fine-tuning features.
+            y: Training/fine-tuning labels.
+            base_score: Override base score (optional).
+
+        Returns:
+            LGBScorecardConstructor with n_base_trees set.
+        """
+        return cls(result.model, X, y, n_base_trees=result.n_base_trees, base_score=base_score)
 
     def extract_model_param(self, param):
         """
@@ -177,6 +199,13 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
 
             This is validated in test_two_tree_base_score_validation().
         """
+        # Validate features
+        expected_features = self.booster_.feature_name()
+        if expected_features:
+            missing = set(expected_features) - set(X.columns)
+            if missing:
+                raise ValueError(f"Input X is missing features the model expects: {missing}")
+
         n_trees = self.booster_.num_trees()
         _colnames = [f"tree_{i}" for i in range(n_trees)]
 
@@ -190,14 +219,12 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
 
         # For margin output, get raw scores per tree
         # Each tree's prediction is returned as-is (no base_score adjustment needed)
-        df_leafs = pd.DataFrame()
-
+        tree_results = []
         for i in range(n_trees):
-            df_leafs[f"tree_{i}"] = self.model.predict(
-                X, raw_score=True, start_iteration=i, num_iteration=1
-            )
+            res = self.model.predict(X, raw_score=True, start_iteration=i, num_iteration=1)
+            tree_results.append(res)
 
-        return df_leafs
+        return pd.DataFrame(np.column_stack(tree_results), index=X.index, columns=_colnames)
 
     def extract_leaf_weights(self) -> pd.DataFrame:
         """
@@ -293,36 +320,27 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
                 f"Invalid leaf index shape {tree_leaf_idx.shape}. Expected {(len(labels), n_trees)}"
             )
 
-        df_binning_table = pd.DataFrame()
-        for i in range(n_trees):
-            index_and_label = pd.concat(
-                [
-                    pd.Series(tree_leaf_idx[:, i], name="leaf_idx"),
-                    pd.Series(labels, name="label"),
-                ],
-                axis=1,
-            )
-            # Create a binning table
-            binning_table = (
-                index_and_label.groupby("leaf_idx").agg(["sum", "count"]).reset_index()
-            ).astype(float)
-            binning_table.columns = ["leaf_idx", "Events", "Count"]  # type: ignore
-            binning_table["tree"] = i
-            binning_table["NonEvents"] = binning_table["Count"] - binning_table["Events"]
-            binning_table["EventRate"] = binning_table["Events"] / binning_table["Count"]
-            binning_table = binning_table[
-                ["tree", "leaf_idx", "Events", "NonEvents", "Count", "EventRate"]
-            ]
-            # Aggregate indices, leafs, and counts of events and non-events
-            df_binning_table = pd.concat([df_binning_table, binning_table], axis=0)
+        # Aggregate indices, leafs, and counts of events and non-events
+        tree_leaf_idx_long = pd.DataFrame(tree_leaf_idx).melt(var_name="Tree", value_name="Node")
+        tree_leaf_idx_long["label"] = np.tile(labels.values, tree_leaf_idx.shape[1])
+        binning_table = (
+            tree_leaf_idx_long.groupby(["Tree", "Node"])["label"]
+            .agg(["sum", "count"])
+            .reset_index()
+        )
+        binning_table.columns = pd.Index(["Tree", "Node", "Events", "Count"])
+        df_binning_table = binning_table.assign(
+            NonEvents=lambda df: df["Count"] - df["Events"],
+            EventRate=lambda df: df["Events"] / df["Count"],
+        )[["Tree", "Node", "Events", "NonEvents", "Count", "EventRate"]]
+
         # Extract leaf weights (XAddEvidence)
         df_x_add_evidence = self.extract_leaf_weights()
         self.lgb_scorecard = df_x_add_evidence.merge(
             df_binning_table,
-            left_on=["Tree", "Node"],
-            right_on=["tree", "leaf_idx"],
+            on=["Tree", "Node"],
             how="left",
-        ).drop(["tree", "leaf_idx"], axis=1)
+        )
 
         self.lgb_scorecard = self.lgb_scorecard[
             [
@@ -343,6 +361,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         self.lgb_scorecard = self.lgb_scorecard.sort_values(by=["Tree", "Node"]).reset_index(
             drop=True
         )
+
         # Get WOE and IV scores
         self.lgb_scorecard["WOE"] = calculate_weight_of_evidence(self.lgb_scorecard)["WOE"]
         self.lgb_scorecard["IV"] = calculate_information_value(self.lgb_scorecard)["IV"]
@@ -352,24 +371,66 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             "Tree"
         )["Count"].transform("sum")
 
-        self.lgb_scorecard = self.lgb_scorecard[
-            [
-                "Tree",
-                "Node",
-                "Feature",
-                "Sign",
-                "Split",
-                "Count",
-                "CountPct",
-                "NonEvents",
-                "Events",
-                "EventRate",
-                "WOE",
-                "IV",
-                "XAddEvidence",
-            ]
+        # Add TreeSource column for fine-tuned models
+        if self.n_base_trees is not None:
+            self.lgb_scorecard["TreeSource"] = np.where(
+                self.lgb_scorecard["Tree"] < self.n_base_trees, "base", "finetuned"
+            )
+
+        base_columns = [
+            "Tree",
+            "Node",
+            "Feature",
+            "Sign",
+            "Split",
+            "Count",
+            "CountPct",
+            "NonEvents",
+            "Events",
+            "EventRate",
+            "WOE",
+            "IV",
+            "XAddEvidence",
         ]
+        if self.n_base_trees is not None:
+            base_columns.append("TreeSource")
+
+        self.lgb_scorecard = self.lgb_scorecard[base_columns]
         return self.lgb_scorecard
+
+    def summarize_score_sources(self) -> pd.DataFrame:
+        """Summarize IV contribution split between base and fine-tuned trees.
+
+        Returns:
+            DataFrame with columns: Feature, BaseIV, FinetunedIV, TotalIV
+
+        Raises:
+            ValueError: If n_base_trees is not set or scorecard not constructed.
+        """
+        if self.n_base_trees is None:
+            raise ValueError(
+                "n_base_trees is not set. Use n_base_trees parameter or from_finetune_result()."
+            )
+        if self.lgb_scorecard is None:
+            raise ValueError("Scorecard not constructed yet. Call construct_scorecard() first.")
+        if "TreeSource" not in self.lgb_scorecard.columns:
+            raise ValueError(
+                "TreeSource column not found. Reconstruct scorecard with n_base_trees set."
+            )
+
+        grouped = (
+            self.lgb_scorecard.groupby(["TreeSource", "Feature"])["IV"]
+            .sum()
+            .unstack(level=0, fill_value=0)
+        )
+        result = pd.DataFrame(
+            {
+                "BaseIV": grouped.get("base", 0),
+                "FinetunedIV": grouped.get("finetuned", 0),
+            }
+        )
+        result["TotalIV"] = result["BaseIV"] + result["FinetunedIV"]
+        return result.reset_index().rename(columns={"index": "Feature"})
 
     def create_points(
         self,
@@ -415,7 +476,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         if score_type != "XAddEvidence":
             raise ValueError(
                 "Only 'XAddEvidence' score_type is supported for LightGBM. "
-                "WOE-based scoring is not recommended due to base_score normalization issues."
+                "For SHAP-based scoring, use predict_score(method='shap') instead."
             )
 
         if self.lgb_scorecard is None:
@@ -428,7 +489,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         # Create scorecard with points
         scdf = self.lgb_scorecard.copy()
 
-        # Normalize Tree 0 by subtracting base_score (if enabled)
+        # Select score column based on score_type
         if use_base_score:
             # IMPORTANT: LightGBM sklearn API includes base_score in the first tree's leaves.
             # We need to subtract base_score from Tree 0 to normalize all trees to the same scale.
@@ -494,58 +555,192 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
 
         # Get leaf indices for all trees
         X_leaf_indices = self.get_leafs(X, output_type="leaf_index")
-
-        result = pd.DataFrame()
-        for col in X_leaf_indices.columns:
-            tree_number = col.split("_")[1]
+        n_samples, n_trees = X_leaf_indices.shape
+        points_matrix = np.zeros((n_samples, n_trees))
+        leaf_idx_values = X_leaf_indices.values
+        for t in range(n_trees):
             # Get points for this tree
-            subset_points_df = self.lgb_scorecard_with_points[
-                self.lgb_scorecard_with_points["Tree"] == int(tree_number)
-            ].copy()
+            tree_points = self.lgb_scorecard_with_points[
+                self.lgb_scorecard_with_points["Tree"] == t
+            ]
+            # Mapping dictionary instead of merge
+            mapping_dict = dict(zip(tree_points["Node"], tree_points["Points"]))
+            points_matrix[:, t] = pd.Series(leaf_idx_values[:, t]).map(mapping_dict).to_numpy()
 
-            # Merge leaf indices with points
-            merged_df = pd.merge(
-                X_leaf_indices[[col]].round(4),
-                subset_points_df[["Node", "Points"]],
-                left_on=col,
-                right_on="Node",
-                how="left",
-            )
-            result[f"Score_{tree_number}"] = merged_df["Points"]
-
+        result = pd.DataFrame(
+            points_matrix, index=X.index, columns=[f"Score_{i}" for i in range(n_trees)]
+        )
         # Add total score
-        result = pd.concat([result, result.sum(axis=1).rename("Score")], axis=1)
+        result["Score"] = points_matrix.sum(axis=1)
         return result
 
-    def predict_score(self, X: pd.DataFrame) -> pd.Series:  # pylint: disable=C0103
+    def predict_score(
+        self,
+        X: pd.DataFrame,  # pylint: disable=C0103
+        method: Optional[str] = None,
+        pdo: int = 50,
+        target_points: int = 600,
+        target_odds: int = 19,
+    ) -> pd.Series:
         """
         Predict scores for new data using the constructed scorecard.
 
         Args:
             X: Input features
+            method: Scoring method to use:
+                - None (default): Use traditional scorecard-based approach (points lookup)
+                - 'shap': Use SHAP values directly (computes SHAP on-the-fly, no binning table)
+            pdo: Points to Double the Odds (only used for method='shap')
+            target_points: Target score for reference odds (only used for method='shap')
+            target_odds: Reference odds ratio (only used for method='shap')
 
         Returns:
             Series of credit scores
 
         Implementation:
-        - Maps observations to leaf nodes using predict(pred_leaf=True)
-        - Looks up points from scorecard
-        - Sums across trees
+        - Default: Maps observations to leaf nodes, looks up points from scorecard, sums across trees
+        - For 'shap': Computes SHAP values on-the-fly, scales directly without binning
         """
+        if method == "shap":
+            # Use stored PDO parameters if available (from create_points), otherwise use provided/defaults
+            pdo = self.pdo if self.pdo is not None else pdo
+            target_points = self.target_points if self.target_points is not None else target_points
+            target_odds = self.target_odds if self.target_odds is not None else target_odds
+            return self._predict_score_shap(X, pdo, target_points, target_odds)
+
+        # Default: use traditional scorecard-based approach (points lookup)
+        # Auto-create points if not already created (for backward compatibility)
+        if self.lgb_scorecard_with_points is None:
+            self.create_points(pdo=pdo, target_points=target_points, target_odds=target_odds)
         points_df = self._convert_tree_to_points(X)
         return pd.Series(points_df["Score"], name="Score")
 
-    def predict_scores(self, X: pd.DataFrame) -> pd.DataFrame:  # pylint: disable=C0103
+    def _predict_score_shap(
+        self,
+        X: pd.DataFrame,  # pylint: disable=C0103
+        pdo: int = 50,
+        target_points: int = 600,
+        target_odds: int = 19,
+    ) -> pd.Series:
         """
-        Predict detailed scores showing contribution from each tree.
+        Predict scores using SHAP values directly (no binning table).
+
+        Args:
+            X: Input features DataFrame
+            pdo: Points to Double the Odds
+            target_points: Target score for reference odds
+            target_odds: Reference odds ratio
+
+        Returns:
+            Series of predicted scores
+        """
+        # Extract SHAP values for input features
+        shap_values_full = extract_shap_values_lgb(
+            self.model, X
+        )  # Shape: (n_samples, n_features + 1)
+        shap_values = shap_values_full[:, :-1]  # Feature contributions
+        base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
+
+        # Validate feature count matches
+        if shap_values.shape[1] != len(X.columns):
+            raise ValueError(
+                f"Feature count mismatch: SHAP values have {shap_values.shape[1]} features, "
+                f"but X has {len(X.columns)} columns"
+            )
+
+        # Use the SHAP scorecard computation function
+        scorecard_dict: dict[str, float | int] = {
+            "pdo": pdo,
+            "target_points": target_points,
+            "target_odds": target_odds,
+        }
+
+        # Compute SHAP-based scores using the dedicated function
+        scorecard_df = compute_shap_scores(
+            shap_values=shap_values,
+            base_value=base_value,
+            feature_names=X.columns.tolist(),
+            scorecard_dict=scorecard_dict,
+        )
+
+        # Extract final scores
+        return scorecard_df["score"]
+
+    def predict_scores(
+        self,
+        X: pd.DataFrame,  # pylint: disable=C0103
+        method: Optional[str] = None,
+        pdo: int = 50,
+        target_points: int = 600,
+        target_odds: int = 19,
+    ) -> pd.DataFrame:
+        """
+        Predict decomposed scores for a given dataset.
 
         Args:
             X: Input features
+            method: Scoring method to use:
+                - None (default): Use traditional scorecard-based approach (tree-level decomposition)
+                - 'shap': Use SHAP values directly (feature-level decomposition)
+            pdo: Points to Double the Odds (only used for method='shap')
+            target_points: Target score for reference odds (only used for method='shap')
+            target_odds: Reference odds ratio (only used for method='shap')
 
         Returns:
-            DataFrame with tree-level score breakdowns
+            DataFrame with decomposed scores (tree-level for default, feature-level for SHAP)
         """
+        if method == "shap":
+            # Use stored PDO parameters if available (from create_points), otherwise use provided/defaults
+            pdo = self.pdo if self.pdo is not None else pdo
+            target_points = self.target_points if self.target_points is not None else target_points
+            target_odds = self.target_odds if self.target_odds is not None else target_odds
+            return self._predict_scores_shap(X, pdo, target_points, target_odds)
+
+        # Default: use traditional scorecard-based approach (tree-level decomposition)
         return self._convert_tree_to_points(X)
+
+    def _predict_scores_shap(
+        self,
+        X: pd.DataFrame,  # pylint: disable=C0103
+        pdo: int = 50,
+        target_points: int = 600,
+        target_odds: int = 19,
+    ) -> pd.DataFrame:
+        """
+        Predict decomposed scores using SHAP values (feature-level decomposition).
+
+        Uses intercept-based scoring where intercept and offset are distributed
+        evenly across features, ensuring feature scores sum to the total score.
+
+        Args:
+            X: Input features DataFrame
+            pdo: Points to Double the Odds
+            target_points: Target score for reference odds
+            target_odds: Reference odds ratio
+
+        Returns:
+            DataFrame with feature-level score contributions and total score
+        """
+        # Extract SHAP values for input features
+        shap_values_full = extract_shap_values_lgb(
+            self.model, X
+        )  # Shape: (n_samples, n_features + 1)
+        shap_values = shap_values_full[:, :-1]  # Feature contributions
+        base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
+
+        # Use the SHAP scorecard computation function
+        scorecard_dict: dict[str, float | int] = {
+            "pdo": pdo,
+            "target_points": target_points,
+            "target_odds": target_odds,
+        }
+
+        return compute_shap_scores(
+            shap_values=shap_values,
+            base_value=base_value,
+            feature_names=X.columns.tolist(),
+            scorecard_dict=scorecard_dict,
+        )
 
     @property
     def sql_query(self) -> str:
