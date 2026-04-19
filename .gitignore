@@ -25,6 +25,7 @@ xbooster.egg-info
 tmp
 python-workspace.code-workspace
 uv.lock
+requirements.txt
 examples/*.sql
 examples/*.py
 # Keep typings directory but ignore pycache
