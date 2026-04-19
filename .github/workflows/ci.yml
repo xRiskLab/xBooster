@@ -110,8 +110,6 @@ jobs:
       run: |
         uv sync --dev
 
-    - name: Run mypy (if configured)
+    - name: Run mypy
       run: |
-        # Add mypy configuration and uncomment when ready
-        # uv run mypy xbooster/
-        echo "Type checking skipped - configure mypy when ready"
+        uv run mypy xbooster/ tests/

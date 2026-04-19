@@ -33,14 +33,6 @@ jobs:
         uv run python -c "import xbooster; print(f'xBooster v{xbooster.__version__}')"
         uv run python -c "import mypy; print('mypy installed')"
 
-    - name: Run linting
-      run: |
-        uv run ruff check xbooster/ tests/
-
-    - name: Run format check
-      run: |
-        uv run ruff format --check xbooster/ tests/
-
     - name: Run type checking
       run: |
         uv run mypy xbooster/ tests/
