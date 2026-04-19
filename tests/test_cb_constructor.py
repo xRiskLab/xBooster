@@ -653,7 +653,8 @@ def test_feature_importance_and_multiple_create_points(credit_data, credit_model
 
         # The points values should be different with the new parameters
         assert not np.array_equal(
-            points_scorecard["Points"].values, points_scorecard2["Points"].values
+            np.asarray(points_scorecard["Points"].values),
+            np.asarray(points_scorecard2["Points"].values),
         )
 
         # Get predictions after second points creation

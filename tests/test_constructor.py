@@ -4,8 +4,6 @@ This module provides test cases for the constructor module, which serves as a un
 interface for importing scorecard constructors.
 """
 
-import pytest
-
 from xbooster.constructor import CBScorecardConstructor, XGBScorecardConstructor
 
 
@@ -33,14 +31,10 @@ def test_invalid_attribute():
     This test intentionally tries to import a non-existent constructor
     to verify that the module raises the correct error.
     """
-    with pytest.raises(ImportError) as exc_info:
-        # This import is expected to fail - InvalidConstructor does not exist
-        from xbooster.constructor import (
-            InvalidConstructor,  # type: ignore[attr-defined]  # noqa: F401
-        )
-    assert "cannot import name 'InvalidConstructor' from 'xbooster.constructor'" in str(
-        exc_info.value
-    )
+    import importlib
+
+    mod = importlib.import_module("xbooster.constructor")
+    assert not hasattr(mod, "InvalidConstructor")
 
 
 def test_constructor_all():

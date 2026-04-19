@@ -15,20 +15,15 @@ Copyright (c) 2025 xRiskLab
 from __future__ import annotations
 
 import importlib
-from typing import Any, Dict, Optional, TypeVar, overload
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
-T = TypeVar("T")
-
-
-@overload
-def _try_import(module_name: str) -> Any: ...
-
-
-@overload
-def _try_import(module_name: str, *, fromlist: list[str]) -> tuple[Any, ...] | None: ...
+if TYPE_CHECKING:
+    from xgboost import XGBClassifier
+    from lightgbm import LGBMClassifier
+    from catboost import CatBoostClassifier, Pool
 
 
 def _try_import(module_name: str, *, fromlist: list[str] | None = None) -> Any:
@@ -52,22 +47,20 @@ def _try_import(module_name: str, *, fromlist: list[str] | None = None) -> Any:
         return None
 
 
-# Optional ML library imports
-xgb = _try_import("xgboost")
-LGBMClassifier = _try_import("lightgbm", fromlist=["LGBMClassifier"])
+# Optional ML library imports (runtime)
+_xgb = _try_import("xgboost")
+_LGBMClassifier = _try_import("lightgbm", fromlist=["LGBMClassifier"])
 
 # Import multiple from same module efficiently
-Pool, CatBoostClassifier = _try_import("catboost", fromlist=["Pool", "CatBoostClassifier"]) or (
-    None,
-    None,
-)
+_cb_imports = _try_import("catboost", fromlist=["Pool", "CatBoostClassifier"])
+_Pool, _CatBoostClassifier = _cb_imports if _cb_imports else (None, None)
 
 
 def compute_shap_scores(
     shap_values: np.ndarray,
     base_value: float,
     feature_names: list,
-    scorecard_dict: Optional[Dict[str, float]] = None,
+    scorecard_dict: Optional[Dict[str, float | int]] = None,
 ) -> pd.DataFrame:
     """
     Convert SHAP values into a scorecard-like system using intercept-based scoring.
@@ -159,7 +152,7 @@ def compute_shap_scores(
 
 
 def extract_shap_values_xgb(
-    model: xgb.XGBClassifier,
+    model: XGBClassifier,
     X: pd.DataFrame,  # pylint: disable=C0103
     base_score: float,
     enable_categorical: bool = False,
@@ -177,14 +170,14 @@ def extract_shap_values_xgb(
         Array of shape (n_samples, n_features + 1) where last column is base_score.
         Feature SHAP values are in columns [:, :-1], base_score is in column [:, -1].
     """
-    if xgb is None:
+    if _xgb is None:
         raise ImportError("xgboost is required for XGBoost SHAP extraction")
     booster = model.get_booster()
     scores = np.full((X.shape[0],), base_score)
     if enable_categorical:
-        dmatrix = xgb.DMatrix(X, base_margin=scores, enable_categorical=True)
+        dmatrix = _xgb.DMatrix(X, base_margin=scores, enable_categorical=True)
     else:
-        dmatrix = xgb.DMatrix(X, base_margin=scores)
+        dmatrix = _xgb.DMatrix(X, base_margin=scores)
     return booster.predict(dmatrix, pred_contribs=True)
 
 
@@ -203,14 +196,14 @@ def extract_shap_values_lgb(
         Array of shape (n_samples, n_features + 1) where last column is base_score.
         Feature SHAP values are in columns [:, :-1], base_score is in column [:, -1].
     """
-    if LGBMClassifier is None:
+    if _LGBMClassifier is None:
         raise ImportError("lightgbm is required for LightGBM SHAP extraction")
     return model.predict(X, pred_contrib=True)
 
 
 def extract_shap_values_cb(
     model: CatBoostClassifier,
-    pool: "Pool",
+    pool: Pool,
 ) -> np.ndarray:
     """
     Extract SHAP values from CatBoost model using native get_feature_importance.
@@ -224,6 +217,6 @@ def extract_shap_values_cb(
         Feature SHAP values are in columns [:, :-1], base_score is in column [:, -1].
         CatBoost SHAP format: [feature1, feature2, ..., featureN, expected_value]
     """
-    if CatBoostClassifier is None or Pool is None:
+    if _CatBoostClassifier is None or _Pool is None:
         raise ImportError("catboost is required for CatBoost SHAP extraction")
     return model.get_feature_importance(type="ShapValues", data=pool)

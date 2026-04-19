@@ -170,7 +170,7 @@ class TestXGBRegression:
         # Verify they match
         assert len(scores) == len(X_test)
         assert len(detailed_scores) == len(X_test)
-        assert np.allclose(scores.values, detailed_scores["Score"].values)
+        assert np.allclose(np.asarray(scores.values), np.asarray(detailed_scores["Score"].values))
 
     def test_leaf_indices_match_scorecard(self, sample_data, trained_model):
         """Test that leaf indices from get_leafs match scorecard construction."""
@@ -231,7 +231,9 @@ class TestXGBRegression:
         model_margins_adjusted = model_margins - constructor.base_score
 
         # They should match closely (allowing for float32 vs float64 precision)
-        assert np.allclose(margin_sums.values, model_margins_adjusted, rtol=1e-4, atol=1e-6)
+        assert np.allclose(
+            np.asarray(margin_sums.values), model_margins_adjusted, rtol=1e-4, atol=1e-6
+        )
 
     def test_woe_and_iv_calculations(self, sample_data, trained_model):
         """Test that WOE and IV are calculated correctly."""

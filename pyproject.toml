@@ -75,7 +75,7 @@ dev = [
     "nbconvert>=7.16.6",
     "pandas-stubs>=2.2.3",
     "prek>=0.2.0",
-    "ty>=0.0.1a21",
+    "mypy>=1.10.0",
     "sourcery>=1.41.1",
 ]
 
@@ -125,57 +125,12 @@ exclude = [
     "examples/**",
 ]
 
-[tool.ty.rules]
-# Common ML libraries have incomplete type stubs
-unresolved-import = "ignore"
-unresolved-reference = "ignore"
-
-# Include type stubs directory if created in the future
-[tool.ty.src]
-include = ["xbooster", "typings"]
-
-# Override rules for examples - more lenient
-[[tool.ty.overrides]]
-include = ["examples/**"]
-[tool.ty.overrides.rules]
-unresolved-import = "ignore"
-unsupported-operator = "ignore"
-unresolved-attribute = "ignore"
-no-matching-overload = "ignore"
-
-# Override rules for tests - allow test patterns
-[[tool.ty.overrides]]
-include = ["tests/**"]
-[tool.ty.overrides.rules]
-unresolved-import = "ignore"
-no-matching-overload = "ignore"
-
-# Specific overrides for xbooster modules with XGBoost/CatBoost/LightGBM
-[[tool.ty.overrides]]
-include = ["xbooster/xgb_constructor.py", "xbooster/cb_constructor.py", "xbooster/catboost_*.py", "xbooster/lgb_constructor.py"]
-[tool.ty.overrides.rules]
-unresolved-attribute = "ignore"
-possibly-missing-attribute = "ignore"
-possibly-missing-import = "ignore"
-invalid-return-type = "ignore"
-invalid-assignment = "ignore"
-no-matching-overload = "ignore"
-invalid-argument-type = "ignore"
-
-# Override for parser and explainer - dynamic ML library attributes
-[[tool.ty.overrides]]
-include = ["xbooster/_parser.py", "xbooster/explainer.py"]
-[tool.ty.overrides.rules]
-possibly-missing-attribute = "ignore"
-invalid-argument-type = "ignore"
-
-# Override for utils - pandas/matplotlib type complexity
-[[tool.ty.overrides]]
-include = ["xbooster/_utils.py"]
-[tool.ty.overrides.rules]
-unsupported-operator = "ignore"
-invalid-argument-type = "ignore"
-not-iterable = "ignore"
+[tool.mypy]
+mypy_path = ["xbooster", "typings"]
+ignore_missing_imports = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+exclude = ["examples/"]
 
 [[tool.uv.index]]
 name = "testpypi"

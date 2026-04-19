@@ -72,7 +72,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
        model.predict(X, raw_score=True) returns margins
     """
 
-    def __init__(self, model, X, y):  # pylint: disable=C0103
+    def __init__(self, model, X, y, n_base_trees=None, base_score=None):  # pylint: disable=C0103
         """
         Initialize the LGBScorecardConstructor.
 
@@ -80,6 +80,11 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             model: Trained LightGBM classifier
             X: Training features
             y: Training labels
+            n_base_trees: Number of base trees (for fine-tuned models). If set,
+                a TreeSource column is added to the scorecard.
+            base_score: Override the base score. Useful for fine-tuned models where
+                the fine-tuning data has a different event rate than the original
+                training data.
         """
         if not isinstance(model, LGBMClassifier):
             raise TypeError("model must be an instance of lightgbm.LGBMClassifier")
@@ -104,7 +109,19 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         # - We subtract base_score from Tree 0 to normalize all trees to the same scale
         # - Then add logit(base_score) during scaling to distribute it across all trees
         # - This ensures each tree contributes proportionally to the final scorecard
-        self.base_score = np.log(y.mean() / (1 - y.mean()))
+        if base_score is not None:
+            self.base_score = base_score
+        else:
+            self.base_score = np.log(y.mean() / (1 - y.mean()))
+
+        # Fine-tuning awareness
+        if n_base_trees is not None:
+            total_trees = self.booster_.num_trees()
+            if n_base_trees > total_trees:
+                raise ValueError(
+                    f"n_base_trees ({n_base_trees}) exceeds total trees ({total_trees})"
+                )
+        self.n_base_trees = n_base_trees
 
         # Initialize scorecard storage
         self.lgb_scorecard = None
@@ -115,6 +132,21 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         self.precision_points = None
         self.score_type = None
         self._sql_query = None
+
+    @classmethod
+    def from_finetune_result(cls, result, X, y, base_score=None):
+        """Create constructor from a FineTuneResult.
+
+        Args:
+            result: FineTuneResult from finetune_lgb().
+            X: Training/fine-tuning features.
+            y: Training/fine-tuning labels.
+            base_score: Override base score (optional).
+
+        Returns:
+            LGBScorecardConstructor with n_base_trees set.
+        """
+        return cls(result.model, X, y, n_base_trees=result.n_base_trees, base_score=base_score)
 
     def extract_model_param(self, param):
         """
@@ -167,6 +199,13 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
 
             This is validated in test_two_tree_base_score_validation().
         """
+        # Validate features
+        expected_features = self.booster_.feature_name()
+        if expected_features:
+            missing = set(expected_features) - set(X.columns)
+            if missing:
+                raise ValueError(f"Input X is missing features the model expects: {missing}")
+
         n_trees = self.booster_.num_trees()
         _colnames = [f"tree_{i}" for i in range(n_trees)]
 
@@ -289,7 +328,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             .agg(["sum", "count"])
             .reset_index()
         )
-        binning_table.columns = ["Tree", "Node", "Events", "Count"]
+        binning_table.columns = pd.Index(["Tree", "Node", "Events", "Count"])
         df_binning_table = binning_table.assign(
             NonEvents=lambda df: df["Count"] - df["Events"],
             EventRate=lambda df: df["Events"] / df["Count"],
@@ -332,24 +371,66 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
             "Tree"
         )["Count"].transform("sum")
 
-        self.lgb_scorecard = self.lgb_scorecard[
-            [
-                "Tree",
-                "Node",
-                "Feature",
-                "Sign",
-                "Split",
-                "Count",
-                "CountPct",
-                "NonEvents",
-                "Events",
-                "EventRate",
-                "WOE",
-                "IV",
-                "XAddEvidence",
-            ]
+        # Add TreeSource column for fine-tuned models
+        if self.n_base_trees is not None:
+            self.lgb_scorecard["TreeSource"] = np.where(
+                self.lgb_scorecard["Tree"] < self.n_base_trees, "base", "finetuned"
+            )
+
+        base_columns = [
+            "Tree",
+            "Node",
+            "Feature",
+            "Sign",
+            "Split",
+            "Count",
+            "CountPct",
+            "NonEvents",
+            "Events",
+            "EventRate",
+            "WOE",
+            "IV",
+            "XAddEvidence",
         ]
+        if self.n_base_trees is not None:
+            base_columns.append("TreeSource")
+
+        self.lgb_scorecard = self.lgb_scorecard[base_columns]
         return self.lgb_scorecard
+
+    def summarize_score_sources(self) -> pd.DataFrame:
+        """Summarize IV contribution split between base and fine-tuned trees.
+
+        Returns:
+            DataFrame with columns: Feature, BaseIV, FinetunedIV, TotalIV
+
+        Raises:
+            ValueError: If n_base_trees is not set or scorecard not constructed.
+        """
+        if self.n_base_trees is None:
+            raise ValueError(
+                "n_base_trees is not set. Use n_base_trees parameter or from_finetune_result()."
+            )
+        if self.lgb_scorecard is None:
+            raise ValueError("Scorecard not constructed yet. Call construct_scorecard() first.")
+        if "TreeSource" not in self.lgb_scorecard.columns:
+            raise ValueError(
+                "TreeSource column not found. Reconstruct scorecard with n_base_trees set."
+            )
+
+        grouped = (
+            self.lgb_scorecard.groupby(["TreeSource", "Feature"])["IV"]
+            .sum()
+            .unstack(level=0, fill_value=0)
+        )
+        result = pd.DataFrame(
+            {
+                "BaseIV": grouped.get("base", 0),
+                "FinetunedIV": grouped.get("finetuned", 0),
+            }
+        )
+        result["TotalIV"] = result["BaseIV"] + result["FinetunedIV"]
+        return result.reset_index().rename(columns={"index": "Feature"})
 
     def create_points(
         self,
@@ -560,8 +641,15 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         shap_values = shap_values_full[:, :-1]  # Feature contributions
         base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
 
+        # Validate feature count matches
+        if shap_values.shape[1] != len(X.columns):
+            raise ValueError(
+                f"Feature count mismatch: SHAP values have {shap_values.shape[1]} features, "
+                f"but X has {len(X.columns)} columns"
+            )
+
         # Use the SHAP scorecard computation function
-        scorecard_dict = {
+        scorecard_dict: dict[str, float | int] = {
             "pdo": pdo,
             "target_points": target_points,
             "target_odds": target_odds,
@@ -641,7 +729,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
         base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
 
         # Use the SHAP scorecard computation function
-        scorecard_dict = {
+        scorecard_dict: dict[str, float | int] = {
             "pdo": pdo,
             "target_points": target_points,
             "target_odds": target_odds,

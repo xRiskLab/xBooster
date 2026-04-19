@@ -376,12 +376,12 @@ def test_xaddevidence_shap_equivalence(scorecard_constructor):  # pylint: disabl
                 # XAddEvidence + adjustment = equivalent to feature SHAP
                 total_margin += row["XAddEvidence"].iloc[0] + base_adjustment
         table_margin_sum.append(total_margin)
-    table_margin_sum = np.array(table_margin_sum)
+    table_margin_arr = np.array(table_margin_sum)
 
     # Verify that adjusted XAddEvidence sum equals feature SHAP sum
-    assert np.allclose(table_margin_sum, feature_shap_sum, atol=1e-4), (
+    assert np.allclose(table_margin_arr, feature_shap_sum, atol=1e-4), (
         f"Adjusted XAddEvidence sum should equal Feature SHAP sum. "
-        f"Max diff: {np.abs(table_margin_sum - feature_shap_sum).max()}"
+        f"Max diff: {np.abs(table_margin_arr - feature_shap_sum).max()}"
     )
 
     # Verify scores match when using same scaling approach
@@ -390,7 +390,7 @@ def test_xaddevidence_shap_equivalence(scorecard_constructor):  # pylint: disabl
     offset = target_points - factor * np.log(target_odds)
     intercept_scaled = factor * shap_base_value
 
-    scores_from_table = np.round(factor * (-table_margin_sum) - intercept_scaled + offset).astype(
+    scores_from_table = np.round(factor * (-table_margin_arr) - intercept_scaled + offset).astype(
         int
     )
     scores_from_feature = np.round(factor * (-feature_shap_sum) - intercept_scaled + offset).astype(

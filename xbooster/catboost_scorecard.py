@@ -31,7 +31,10 @@ class CatBoostScorecard:
     """
 
     # Class variable to store debug info
-    debug_info = {}
+    debug_info: dict[str, Any] = {}
+    level_conditions: dict[int, list[str]] = {}
+    model: Any = None
+    pool: Any = None
 
     @staticmethod
     def _is_numeric_only_condition(condition: str) -> bool:
@@ -51,7 +54,7 @@ class CatBoostScorecard:
             if hasattr(pool, "get_feature_names") and callable(pool.get_feature_names):
                 feature_names = pool.get_feature_names()
             # Alternative approach
-            elif hasattr(pool, "_feature_names"):
+            elif hasattr(pool, "_feature_names") and pool._feature_names is not None:
                 feature_names = pool._feature_names
         return feature_names
 
@@ -119,7 +122,7 @@ class CatBoostScorecard:
         return f"{feature} {'>' if is_true else '<='}"
 
     @staticmethod
-    def _get_leaf_conditions(cb_obj: object, pool: Pool, tree_idx: int) -> Dict[int, str]:
+    def _get_leaf_conditions(cb_obj: Any, pool: Pool, tree_idx: int) -> Dict[int, str]:
         """Get leaf conditions for a given tree index, handling both types of trees."""
         split_conditions = cb_obj._get_tree_splits(tree_idx, pool)
         leaf_count = int(cb_obj._get_tree_leaf_counts()[tree_idx])
@@ -204,7 +207,7 @@ class CatBoostScorecard:
             leaf_count = int(cb_obj._get_tree_leaf_counts()[tree_idx])
 
             for leaf_idx in range(leaf_count):
-                val_str = leaf_vals[leaf_idx] if leaf_idx < len(leaf_vals) else "val = 0.0"
+                val_str = str(leaf_vals[leaf_idx]) if leaf_idx < len(leaf_vals) else "val = 0.0"
                 clean_val = float(val_str.replace("val = ", "").strip())
                 conditions = leaf_conditions.get(leaf_idx, "")
 
@@ -355,8 +358,8 @@ class CatBoostScorecard:
         records = []
         for tree_idx in range(tree_count):
             leaf_vals = cb_obj._get_tree_leaf_values(tree_idx)
-            for node_idx, val_str in enumerate(leaf_vals):
-                clean_val = float(val_str.replace("val = ", "").strip())
+            for node_idx, val_raw in enumerate(leaf_vals):
+                clean_val = float(str(val_raw).replace("val = ", "").strip())
                 records.append(
                     {
                         "Tree": tree_idx,

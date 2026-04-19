@@ -38,6 +38,7 @@ class CBScorecardConstructor:
         y: Optional[pd.Series] = None,
         use_woe: bool = False,
         points_column: Optional[str] = None,
+        n_base_trees: Optional[int] = None,
     ) -> None:
         """
         Initialize the scorecard constructor.
@@ -49,6 +50,8 @@ class CBScorecardConstructor:
             y: Labels (required if pool is a DataFrame)
             use_woe: If True, use WOE values; if False, use XAddEvidence (default: False)
             points_column: If provided, use this column for scoring
+            n_base_trees: Number of base trees (for fine-tuned models). If set,
+                a TreeSource column is added to the scorecard.
 
         Examples:
             # Using Pool object (original API)
@@ -60,6 +63,18 @@ class CBScorecardConstructor:
         self.model = model
         self.use_woe = use_woe
         self.points_column = points_column
+        self.pool: Any = None
+        self.X: Any = None
+        self.y: Any = None
+
+        # Fine-tuning awareness
+        if n_base_trees is not None and model is not None:
+            total_trees = model.tree_count_
+            if n_base_trees > total_trees:
+                raise ValueError(
+                    f"n_base_trees ({n_base_trees}) exceeds total trees ({total_trees})"
+                )
+        self.n_base_trees = n_base_trees
 
         # Support both Pool object and (X, y) pattern for consistency with XGBoost/LightGBM
         if isinstance(pool, pd.DataFrame) and y is not None:
@@ -105,6 +120,53 @@ class CBScorecardConstructor:
         self.original_mapper: Optional[CatBoostWOEMapper] = None
         self.original_scorecard: Optional[pd.DataFrame] = None
         self.points_enabled = False
+
+    @classmethod
+    def from_finetune_result(cls, result, X, y, **kwargs):
+        """Create constructor from a FineTuneResult.
+
+        Args:
+            result: FineTuneResult from finetune_cb().
+            X: Training/fine-tuning features (pd.DataFrame).
+            y: Training/fine-tuning labels (pd.Series).
+            **kwargs: Additional arguments passed to CBScorecardConstructor.
+
+        Returns:
+            CBScorecardConstructor with n_base_trees set.
+        """
+        return cls(result.model, X, y, n_base_trees=result.n_base_trees, **kwargs)
+
+    def summarize_score_sources(self) -> pd.DataFrame:
+        """Summarize IV contribution split between base and fine-tuned trees.
+
+        Returns:
+            DataFrame with columns: Feature, BaseIV, FinetunedIV, TotalIV
+
+        Raises:
+            ValueError: If n_base_trees is not set or scorecard not constructed.
+        """
+        if self.n_base_trees is None:
+            raise ValueError(
+                "n_base_trees is not set. Use n_base_trees parameter or from_finetune_result()."
+            )
+
+        scorecard = self.construct_scorecard()
+        if "TreeSource" not in scorecard.columns:
+            raise ValueError(
+                "TreeSource column not found. Reconstruct scorecard with n_base_trees set."
+            )
+
+        grouped = (
+            scorecard.groupby(["TreeSource", "Feature"])["IV"].sum().unstack(level=0, fill_value=0)
+        )
+        result = pd.DataFrame(
+            {
+                "BaseIV": grouped.get("base", 0),
+                "FinetunedIV": grouped.get("finetuned", 0),
+            }
+        )
+        result["TotalIV"] = result["BaseIV"] + result["FinetunedIV"]
+        return result.reset_index().rename(columns={"index": "Feature"})
 
     def fit(self, model: CatBoostClassifier, pool: Pool) -> None:
         """
@@ -167,6 +229,7 @@ class CBScorecardConstructor:
         """
         if self.scorecard_df is None:
             self._build_scorecard()
+        assert self.scorecard_df is not None
 
         scorecard = self.scorecard_df.copy()
 
@@ -181,24 +244,24 @@ class CBScorecardConstructor:
                     # Extract feature name and split value
                     if " <= " in last_condition:
                         feature, value = last_condition.split(" <= ")
-                        scorecard.loc[idx, "Feature"] = feature.strip()
-                        scorecard.loc[idx, "Split"] = float(value.strip())
-                        scorecard.loc[idx, "Sign"] = "<="
+                        scorecard.at[idx, "Feature"] = feature.strip()
+                        scorecard.at[idx, "Split"] = float(value.strip())
+                        scorecard.at[idx, "Sign"] = "<="
                     elif " > " in last_condition:
                         feature, value = last_condition.split(" > ")
-                        scorecard.loc[idx, "Feature"] = feature.strip()
-                        scorecard.loc[idx, "Split"] = float(value.strip())
-                        scorecard.loc[idx, "Sign"] = ">"
+                        scorecard.at[idx, "Feature"] = feature.strip()
+                        scorecard.at[idx, "Split"] = float(value.strip())
+                        scorecard.at[idx, "Sign"] = ">"
                     elif " = " in last_condition:
                         feature, value = last_condition.split(" = ")
-                        scorecard.loc[idx, "Feature"] = feature.strip()
-                        scorecard.loc[idx, "Split"] = value.strip().strip("'\"")
-                        scorecard.loc[idx, "Sign"] = "="
+                        scorecard.at[idx, "Feature"] = feature.strip()
+                        scorecard.at[idx, "Split"] = value.strip().strip("'\"")
+                        scorecard.at[idx, "Sign"] = "="
                     elif " != " in last_condition:
                         feature, value = last_condition.split(" != ")
-                        scorecard.loc[idx, "Feature"] = feature.strip()
-                        scorecard.loc[idx, "Split"] = value.strip().strip("'\"")
-                        scorecard.loc[idx, "Sign"] = "!="
+                        scorecard.at[idx, "Feature"] = feature.strip()
+                        scorecard.at[idx, "Split"] = value.strip().strip("'\"")
+                        scorecard.at[idx, "Sign"] = "!="
 
         # Calculate average event rate
         total_events = scorecard["Events"].sum()
@@ -207,14 +270,21 @@ class CBScorecardConstructor:
         clipped_event_rate = scorecard["EventRate"].clip(lower=1e-3, upper=1 - 1e-3)
 
         # Calculate WOE and IV
-        scorecard["WOE"] = np.log(
+        woe_raw = np.log(
             (clipped_event_rate / (1 - clipped_event_rate))
             / (avg_event_rate / (1 - avg_event_rate))
-        ).fillna(0)
+        )
+        scorecard["WOE"] = pd.Series(woe_raw).fillna(0).values
         scorecard["IV"] = (scorecard["EventRate"] - avg_event_rate) * scorecard["WOE"]
 
         # Calculate CountPct
         scorecard["CountPct"] = (scorecard["Count"] / total_count).fillna(0.0)
+
+        # Add TreeSource column for fine-tuned models
+        if self.n_base_trees is not None:
+            scorecard["TreeSource"] = np.where(
+                scorecard["Tree"] < self.n_base_trees, "base", "finetuned"
+            )
 
         # Build column list
         base_columns = [
@@ -233,6 +303,8 @@ class CBScorecardConstructor:
             "IV",
             "DetailedSplit",
         ]
+        if self.n_base_trees is not None:
+            base_columns.append("TreeSource")
 
         # Return only the basic columns
         return scorecard[base_columns]
@@ -306,7 +378,7 @@ class CBScorecardConstructor:
         pdo: float = 50,
         target_points: float = 600,
         target_odds: float = 19,
-    ) -> Union[float, np.ndarray]:
+    ) -> Any:
         """
         Predict scores using the specified method.
 
@@ -355,17 +427,18 @@ class CBScorecardConstructor:
 
         if method == "raw" or method == "woe":
             # Use original mapper for raw and woe methods if available
-            original_mapper = self.original_mapper if self.points_enabled else self.mapper
+            active_mapper = self.original_mapper if self.points_enabled else self.mapper
+            assert active_mapper is not None
 
             # Set the appropriate value column based on method
             if method == "raw":
-                original_mapper.value_column = "XAddEvidence"
-                original_mapper.use_woe = False
+                active_mapper.value_column = "XAddEvidence"
+                active_mapper.use_woe = False
             else:
-                original_mapper.value_column = "WOE"
-                original_mapper.use_woe = True
+                active_mapper.value_column = "WOE"
+                active_mapper.use_woe = True
 
-            scores = original_mapper.predict_score(features)
+            scores = active_mapper.predict_score(features)
         elif method == "pdo":
             # Use current mapper for points method
             self.mapper.value_column = "Points"
@@ -416,6 +489,13 @@ class CBScorecardConstructor:
         )  # Shape: (n_samples, n_features + 1)
         shap_values = shap_values_full[:, :-1]  # Feature contributions
         base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
+
+        # Validate feature count matches
+        if shap_values.shape[1] != len(features.columns):
+            raise ValueError(
+                f"Feature count mismatch: SHAP values have {shap_values.shape[1]} features, "
+                f"but input has {len(features.columns)} columns"
+            )
 
         # Use the SHAP scorecard computation function
         scorecard_dict = {

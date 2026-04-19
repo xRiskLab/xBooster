@@ -86,7 +86,7 @@ class DataPreprocessor:
         """
         Generate interaction constraints based on the features of the dataset.
         """
-        interaction_constraints = {}
+        interaction_constraints: dict[str, list[str]] = {}
         for feature in features:
             base_feature = feature.rsplit("_", 1)[0]
             if base_feature not in interaction_constraints:
@@ -333,8 +333,8 @@ class CatBoostPreprocessor(BaseEstimator, TransformerMixin):
         self.max_categories = max_categories
         self.top_p = top_p
         self.other_token = other_token
-        self.category_maps = {}
-        self.cat_features_ = None
+        self.category_maps: dict[str, set[str]] = {}
+        self.cat_features_: list[str] = []
 
     def fit(self, X: pd.DataFrame, y=None, cat_features: Optional[list[str]] = None):
         """Fit the preprocessor to the DataFrame."""
@@ -385,11 +385,11 @@ class CatBoostTreeVisualizer:
 
     def __init__(self, scorecard: pd.DataFrame, plot_config: Optional[Dict[str, Any]] = None):
         self.scorecard = scorecard
-        self.tree_cache = {}
+        self.tree_cache: dict[int, dict[str, Any]] = {}
         self.plot_config = plot_config or {}
 
         # Default configuration
-        self.config = {
+        self.config: dict[str, Any] = {
             "facecolor": "#ffffff",
             "edgecolor": "black",
             "edgewidth": 0,

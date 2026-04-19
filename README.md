@@ -227,6 +227,56 @@ cb_scores_shap = cb_constructor.predict_score(X_test, method="shap")
 
 For detailed examples, see the [SHAP Scorecard Examples notebook](examples/shap-scorecard-examples.ipynb).
 
+### Fine-Tuning Support
+
+xbooster provides helpers for incremental model updates — freeze base trees and append new ones, or warm-start with expanded features.
+
+**Same features (continued training):**
+
+```python
+from xbooster.finetuner import finetune_xgb
+
+# Fine-tune: base trees are frozen, 50 new trees appended
+result = finetune_xgb(base_model, X_new, y_new, n_estimators=50)
+
+print(f"Base trees: {result.n_base_trees}")
+print(f"Total trees: {result.n_total_trees}")
+```
+
+**Expanded features (warm-start):**
+
+```python
+# X_expanded has original + new columns
+result = finetune_xgb(base_model, X_expanded, y_new, n_estimators=50)
+
+print(f"New features: {result.new_features}")
+# n_base_trees=0 since base trees can't use new features
+```
+
+**Build a scorecard from the fine-tuned model:**
+
+```python
+from xbooster.constructor import XGBScorecardConstructor
+
+# Option 1: from FineTuneResult
+constructor = XGBScorecardConstructor.from_finetune_result(result, X_new, y_new)
+
+# Option 2: pass n_base_trees directly
+constructor = XGBScorecardConstructor(result.model, X_new, y_new, n_base_trees=result.n_base_trees)
+
+scorecard = constructor.construct_scorecard()
+
+# Scorecard now has a TreeSource column (base/finetuned)
+print(scorecard[["Tree", "Feature", "TreeSource"]].head())
+
+# See contribution split between base and fine-tuned trees
+print(constructor.summarize_score_sources())
+```
+
+The same API is available for LightGBM (`finetune_lgb`) and CatBoost (`finetune_cb`).
+
+For a complete walkthrough, see the [Fine-Tuning Getting Started notebook](examples/finetuning-getting-started.ipynb).
+
 ### Interval Scorecards 📊
 
 Convert complex tree-based scorecards into simplified interval-based rules. This feature requires `max_depth=1` models and follows industry standard practices (Siddiqi, 2017):

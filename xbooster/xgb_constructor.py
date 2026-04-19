@@ -17,7 +17,7 @@ Copyright (c) 2025 xRiskLab
 """
 
 import json
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -62,7 +62,7 @@ class XGBScorecardConstructor:
     ```
     """
 
-    def __init__(self, model, X, y):  # pylint: disable=R0913, C0103
+    def __init__(self, model, X, y, n_base_trees=None):  # pylint: disable=R0913, C0103
         if not isinstance(model, xgb.XGBClassifier):
             raise TypeError("model must be an instance of xgboost.XGBClassifier")
         self.model = model
@@ -81,8 +81,32 @@ class XGBScorecardConstructor:
         self.precision_points = None
         self.score_type = None
         self._sql_query = None
+
+        # Fine-tuning awareness
+        if n_base_trees is not None:
+            total_trees = self.booster_.num_boosted_rounds()
+            if n_base_trees > total_trees:
+                raise ValueError(
+                    f"n_base_trees ({n_base_trees}) exceeds total trees ({total_trees})"
+                )
+        self.n_base_trees = n_base_trees
+
         if self.max_depth > 1:
             self.extract_decision_nodes()
+
+    @classmethod
+    def from_finetune_result(cls, result, X, y):
+        """Create constructor from a FineTuneResult.
+
+        Args:
+            result: FineTuneResult from finetune_xgb().
+            X: Training/fine-tuning features.
+            y: Training/fine-tuning labels.
+
+        Returns:
+            XGBScorecardConstructor with n_base_trees set.
+        """
+        return cls(result.model, X, y, n_base_trees=result.n_base_trees)
 
     def extract_model_param(self, param):
         """
@@ -180,6 +204,13 @@ class XGBScorecardConstructor:
         through One-Hot Encoding and Regularization.
         https://arxiv.org/pdf/2304.13761.pdf
         """
+
+        # Validate features
+        expected_features = self.booster_.feature_names
+        if expected_features is not None:
+            missing = set(expected_features) - set(X.columns)
+            if missing:
+                raise ValueError(f"Input X is missing features the model expects: {missing}")
 
         n_rounds = self.booster_.num_boosted_rounds()
         scores = np.full((X.shape[0],), self.base_score)  # pylint: disable=C0103
@@ -338,7 +369,7 @@ class XGBScorecardConstructor:
             .agg(["sum", "count"])
             .reset_index()
         )
-        binning_table.columns = ["Tree", "Node", "Events", "Count"]
+        binning_table.columns = pd.Index(["Tree", "Node", "Events", "Count"])
         df_binning_table = binning_table.assign(
             NonEvents=lambda df: df["Count"] - df["Events"],
             EventRate=lambda df: df["Events"] / df["Count"],
@@ -370,6 +401,12 @@ class XGBScorecardConstructor:
         # Retrieve a detailed split
         self.xgb_scorecard = self.add_detailed_split(dataframe=self.xgb_scorecard)
 
+        # Add TreeSource column for fine-tuned models
+        if self.n_base_trees is not None:
+            self.xgb_scorecard["TreeSource"] = np.where(
+                self.xgb_scorecard["Tree"] < self.n_base_trees, "base", "finetuned"
+            )
+
         # Build column list
         base_columns = [
             "Tree",
@@ -387,8 +424,44 @@ class XGBScorecardConstructor:
             "XAddEvidence",
             "DetailedSplit",
         ]
+        if self.n_base_trees is not None:
+            base_columns.append("TreeSource")
 
         return self.xgb_scorecard[base_columns]
+
+    def summarize_score_sources(self) -> pd.DataFrame:
+        """Summarize IV contribution split between base and fine-tuned trees.
+
+        Returns:
+            DataFrame with columns: Feature, BaseIV, FinetunedIV, TotalIV
+
+        Raises:
+            ValueError: If n_base_trees is not set or scorecard not constructed.
+        """
+        if self.n_base_trees is None:
+            raise ValueError(
+                "n_base_trees is not set. Use n_base_trees parameter or from_finetune_result()."
+            )
+        if self.xgb_scorecard is None:
+            raise ValueError("Scorecard not constructed yet. Call construct_scorecard() first.")
+        if "TreeSource" not in self.xgb_scorecard.columns:
+            raise ValueError(
+                "TreeSource column not found. Reconstruct scorecard with n_base_trees set."
+            )
+
+        grouped = (
+            self.xgb_scorecard.groupby(["TreeSource", "Feature"])["IV"]
+            .sum()
+            .unstack(level=0, fill_value=0)
+        )
+        result = pd.DataFrame(
+            {
+                "BaseIV": grouped.get("base", 0),
+                "FinetunedIV": grouped.get("finetuned", 0),
+            }
+        )
+        result["TotalIV"] = result["BaseIV"] + result["FinetunedIV"]
+        return result.reset_index().rename(columns={"index": "Feature"})
 
     def create_points(  # pylint: disable=R0913
         self,
@@ -627,8 +700,15 @@ class XGBScorecardConstructor:
         shap_values = shap_values_full[:, :-1]  # Feature contributions
         base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
 
+        # Validate feature count matches
+        if shap_values.shape[1] != len(X.columns):
+            raise ValueError(
+                f"Feature count mismatch: SHAP values have {shap_values.shape[1]} features, "
+                f"but X has {len(X.columns)} columns"
+            )
+
         # Use the SHAP scorecard computation function
-        scorecard_dict = {
+        scorecard_dict: dict[str, float | int] = {
             "pdo": pdo,
             "target_points": target_points,
             "target_odds": target_odds,
@@ -708,7 +788,7 @@ class XGBScorecardConstructor:
         base_value = float(np.mean(shap_values_full[:, -1]))  # Base value (expected value)
 
         # Use the SHAP scorecard computation function
-        scorecard_dict = {
+        scorecard_dict: dict[str, float | int] = {
             "pdo": pdo,
             "target_points": target_points,
             "target_odds": target_odds,
@@ -943,16 +1023,21 @@ class XGBScorecardConstructor:
         self.xgb_scorecard_intv["NonEvents"] = np.nan
         X_event = self.X.loc[self.y == 1]
         X_nonevent = self.X.loc[self.y == 0]
-        for bin in self.xgb_scorecard_intv.itertuples():
-            has_missing = "Missing" in bin.Bin
-            self.xgb_scorecard_intv.loc[bin.Index, "Count"] = query_count(
-                self.X, bin.Feature, bin.Left, bin.Right, has_missing
+        for row_item in self.xgb_scorecard_intv.itertuples():
+            row_bin2: Any = row_item
+            bin_str = str(row_bin2.Bin)
+            feat = str(row_bin2.Feature)
+            left = float(row_bin2.Left)
+            right = float(row_bin2.Right)
+            has_missing = "Missing" in bin_str
+            self.xgb_scorecard_intv.loc[row_bin2.Index, "Count"] = query_count(
+                self.X, feat, left, right, has_missing
             )
-            self.xgb_scorecard_intv.loc[bin.Index, "Events"] = query_count(
-                X_event, bin.Feature, bin.Left, bin.Right, has_missing
+            self.xgb_scorecard_intv.loc[row_bin2.Index, "Events"] = query_count(
+                X_event, feat, left, right, has_missing
             )
-            self.xgb_scorecard_intv.loc[bin.Index, "NonEvents"] = query_count(
-                X_nonevent, bin.Feature, bin.Left, bin.Right, has_missing
+            self.xgb_scorecard_intv.loc[row_bin2.Index, "NonEvents"] = query_count(
+                X_nonevent, feat, left, right, has_missing
             )
 
         # Add 'CountPct as proportion of total observations

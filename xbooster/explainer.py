@@ -67,7 +67,7 @@ def build_interactions_splits(  # pylint: disable=R0914
     Returns:
         pd.DataFrame: A dataframe with interactions splits.
     """
-    interactions_data = []
+    interactions_data: list[dict[str, Any]] = []
 
     if dataframe is None and scorecard_constructor is None:
         raise ValueError("Either 'scorecard_constructor' or 'dataframe' must be provided.")
@@ -162,7 +162,7 @@ def split_and_count(  # pylint: disable=R0914
         ValueError: If dataframe is not provided.
         ValueError: If label_column is not provided.
     """
-    split_and_count_data = []
+    split_and_count_data: Any = []
 
     dataframe = (
         pd.concat([scorecard_constructor.X, scorecard_constructor.y], axis=1)  # type: ignore
@@ -232,7 +232,7 @@ def split_and_count(  # pylint: disable=R0914
 
 # pylint: disable=too-many-arguments, too-many-lines
 def plot_importance(
-    scorecard_constructor: Optional[XGBScorecardConstructor] = None,
+    scorecard_constructor: Optional[Any] = None,
     metric: str = "Likelihood",
     normalize: bool = True,
     method: Optional[str] = None,
@@ -388,7 +388,7 @@ def plot_score_distribution(
         y_true = scorecard_constructor.y
         y_pred = scorecard_constructor.predict_score(scorecard_constructor.X)  # type: ignore
 
-    # type: ignore
+    assert y_true is not None and y_pred is not None
     if isinstance(y_true, pd.DataFrame) and y_true.shape[1].shape is None:
         raise ValueError("Must have two classes.")
 
@@ -613,10 +613,10 @@ class TreeVisualizer:
         precision: Optional[int] = None,
     ):
         self.scorecard_constructor: Optional[XGBScorecardConstructor] = None
-        self.tree_dump: Optional[Dict[str, Any]] = None
+        self.tree_dump: Any = None
         self.scorecard_frame: Optional[pd.DataFrame] = None
         self.metrics: List[str] = metrics if metrics is not None else []
-        self.precision: int = precision
+        self.precision: Optional[int] = precision
 
     # pylint: disable=too-many-locals, too-many-statements
     def parse_xgb_output(
@@ -636,16 +636,16 @@ class TreeVisualizer:
         """
         self.scorecard_constructor = scorecard_constructor
 
-        nodes = {}
+        nodes: Dict[str, Dict[str, Any]] = {}
         root_id = None
 
         if self.scorecard_constructor is None:
             raise ValueError("The scorecard constructor is not set.")
 
-        self.tree_dump = self.scorecard_constructor.model.get_booster().get_dump()[num_trees]
-        self.scorecard_frame = self.scorecard_constructor.xgb_scorecard_with_points.query(
-            f"Tree == {num_trees}"
-        )
+        self.tree_dump = str(self.scorecard_constructor.model.get_booster().get_dump()[num_trees])
+        scorecard_with_points = self.scorecard_constructor.xgb_scorecard_with_points
+        assert scorecard_with_points is not None
+        self.scorecard_frame = scorecard_with_points.query(f"Tree == {num_trees}")
 
         for line in self.tree_dump.split("\n"):
             line = line.strip()
@@ -677,21 +677,18 @@ class TreeVisualizer:
                         conditions,
                     )
 
-                    node_dict = {
+                    children: Dict[str, Any] = {}
+                    for branch, target in branches:
+                        if target != "" and branch != "missing":
+                            children[branch] = target.strip()
+
+                    node_dict: Dict[str, Any] = {
                         "name": feature,
                         "depth": depth,
-                        "children": {},
+                        "children": children,
                     }
 
-                    for branch, target in branches:
-                        if target != "" and branch != "missing":
-                            node_dict["children"][branch] = target.strip()
-
                     nodes[node_id] = node_dict
-
-                    for branch, target in branches:
-                        if target != "" and branch != "missing":
-                            node_dict["children"][branch] = target.strip()
 
                     nodes[node_id] = node_dict
 
@@ -733,7 +730,7 @@ class TreeVisualizer:
                 "depth": node["depth"],
             }
             if "children" in node:
-                aligned_children = {}
+                aligned_children: dict[str, Any] = {}
                 for branch, child_node in node["children"].items():
                     if isinstance(child_node, str):
                         aligned_children[branch] = child_node
@@ -742,6 +739,7 @@ class TreeVisualizer:
                 aligned_node["children"] = aligned_children
             return aligned_node
 
+        assert root_id is not None
         aligned_tree = align_format(_build_tree(root_id, 0))
         self.tree_dump = {"0": aligned_tree}
 
@@ -758,7 +756,7 @@ class TreeVisualizer:
         Raises:
             ValueError: If any of the required metrics are not found in the scorecard dataframe.
         """
-        if self.metrics is None:
+        if self.metrics is None or self.scorecard_frame is None:
             return None
         if missing_metrics := [
             metric for metric in self.metrics if metric not in self.scorecard_frame.columns

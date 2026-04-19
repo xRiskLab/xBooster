@@ -21,3 +21,11 @@ repos:
       - id: ruff-check
         args: [--fix]
       - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.14.1
+    hooks:
+      - id: mypy
+        additional_dependencies: [pandas-stubs]
+        args: [--config-file=pyproject.toml]
+        files: ^xbooster/
