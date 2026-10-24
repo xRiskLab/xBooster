@@ -338,8 +338,11 @@ class CatBoostPreprocessor(BaseEstimator, TransformerMixin):
         self.category_maps: dict[str, set[str]] = {}
         self.cat_features_: list[str] = []
 
-    def fit(self, X: pd.DataFrame, y=None, cat_features: Optional[list[str]] = None):
+    def fit(self, X: pd.DataFrame, y=None, cat_features: Optional[list[str]] = None, **fit_params):
         """Fit the preprocessor to the DataFrame."""
+        # Checked again here because set_params() bypasses __init__
+        if self.max_categories is not None and self.top_p is not None:
+            raise ValueError("Set either `max_categories` or `top_p`, not both")
         self.cat_features_ = cat_features or X.select_dtypes(include="object").columns.tolist()
 
         for col in self.cat_features_:
@@ -372,7 +375,7 @@ class CatBoostPreprocessor(BaseEstimator, TransformerMixin):
         self, X: pd.DataFrame, y=None, cat_features: Optional[list[str]] = None, **fit_params
     ) -> pd.DataFrame:
         """Fit the preprocessor and transform the data."""
-        return self.fit(X, y, cat_features).transform(X)
+        return self.fit(X, y, cat_features, **fit_params).transform(X)
 
     def __call__(self, X: pd.DataFrame, cat_features: list[str]) -> pd.DataFrame:
         """A callable interface for the preprocessor."""

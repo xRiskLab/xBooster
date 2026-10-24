@@ -15,8 +15,12 @@
 
 ### Fixed
 - `XGBScorecardConstructor.create_points()` now updates `pdo`, `target_points`, `target_odds`,
-  `precision_points`, and `score_type` on every call; previously only the first call's values
-  were stored, so `predict_score(method="shap")` used stale scaling after re-calling `create_points()`
+  `precision_points`, and `score_type` on every successful call; previously only the first call's
+  values were stored, so `predict_score(method="shap")` used stale scaling after re-calling
+  `create_points()`. A call that raises leaves the previous scaling in place
+- `explainer.plot_score_distribution()` paired labels and scores by index after resetting only the
+  labels' index, so with a non-default index (e.g. a `train_test_split` test set) no observation got
+  both a label and a score and the histograms were empty. Labels and scores are now paired by position
 - Removed a no-op categorical split cleanup in `extract_leaf_weights()` and unreachable branches
   in `create_points()`
 - `make typecheck` / `make ci-check` now run mypy and ty (previously called `ty` without it installed)
@@ -29,7 +33,8 @@
   because pandas 3 inferred `Split` as `str` and rejected float thresholds; `Split` is now `object`.
   Also typed `CatBoostWOEMapper` feature importance and default-leaf lookups for pandas-stubs 3
 - `CatBoostPreprocessor.fit_transform()` signature is now compatible with scikit-learn's
-  `TransformerMixin`
+  `TransformerMixin` and passes `fit_params` through to `fit()`; `fit()` also rejects setting both
+  `max_categories` and `top_p`, which `set_params()` could otherwise introduce
 - `scipy.special` stubs accept array-likes (pandas Series), matching scipy's real signature
 - Removed 15 `# type: ignore` comments that neither mypy nor ty needed
 

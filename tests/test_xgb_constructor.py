@@ -434,13 +434,22 @@ def test_create_points_updates_scaling(xgb_model, scorecard_constructor, X_test)
     fresh.construct_scorecard()
     fresh.create_points(pdo=20, target_points=500, target_odds=50)
 
+    default = XGBScorecardConstructor(xgb_model, X, y)
+    default.construct_scorecard()
+    default.create_points()
+
     assert recalled.pdo == 20
     assert recalled.target_points == 500
     assert recalled.target_odds == 50
-    pd.testing.assert_series_equal(
-        recalled.predict_score(X_test, method="shap"),
-        fresh.predict_score(X_test, method="shap"),
-    )
+    recalled_scores = recalled.predict_score(X_test, method="shap")
+    pd.testing.assert_series_equal(recalled_scores, fresh.predict_score(X_test, method="shap"))
+    # The stored scaling must actually be used, not just stored
+    assert not recalled_scores.equals(default.predict_score(X_test, method="shap"))
+
+    # A failed call keeps the previous scaling
+    with pytest.raises(ValueError):
+        recalled.create_points(pdo=99, score_type="SHAP")
+    assert recalled.pdo == 20
 
 
 def test_predict_score(scorecard_constructor, X_test):  # pylint: disable=W0621, C0103

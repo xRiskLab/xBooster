@@ -507,13 +507,6 @@ class XGBScorecardConstructor:
         https://wandb.ai/morgan/credit_scorecard/artifacts/dataset/vehicle_loan_defaults/v1.
         """
 
-        # Store the parameters as attributes of the class
-        self.pdo = pdo
-        self.target_points = target_points
-        self.target_odds = target_odds
-        self.precision_points = precision_points
-        self.score_type = score_type
-
         if score_type not in {"XAddEvidence", "WOE"}:
             raise ValueError(
                 "constructor.py: score must be one of 'XAddEvidence' or 'WOE'. "
@@ -572,6 +565,14 @@ class XGBScorecardConstructor:
             )
 
         self.xgb_scorecard_with_points.reset_index(inplace=True)
+
+        # Store the parameters only once the points table is built, so a failed
+        # call doesn't leave scaling that predict_score(method="shap") would use
+        self.pdo = pdo
+        self.target_points = target_points
+        self.target_odds = target_odds
+        self.precision_points = precision_points
+        self.score_type = score_type
 
         return self.xgb_scorecard_with_points
 

@@ -158,3 +158,7 @@ def test_catboost_preprocessor_category_limits():
 
     with pytest.raises(ValueError):
         _utils.CatBoostPreprocessor(max_categories=3, top_p=0.9)
+
+    # set_params() bypasses __init__, so fit() must reject both limits as well
+    with pytest.raises(ValueError):
+        _utils.CatBoostPreprocessor(max_categories=3).set_params(top_p=0.9).fit(X)

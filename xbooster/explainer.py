@@ -401,10 +401,12 @@ def plot_score_distribution(
     label = "label" if y_true.name is None else y_true.name
     score = "score" if y_pred.name is None else y_pred.name
 
+    # Pair labels and scores by position: callers often pass a test split's
+    # labels with scores whose index differs (or that have no index at all)
     scores_with_labels = pd.concat(
         [
             y_true.reset_index(drop=True),
-            pd.Series(y_pred, name=score),
+            pd.Series(np.asarray(y_pred), name=score),
         ],
         axis=1,
     )
