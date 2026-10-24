@@ -41,7 +41,9 @@ format-check: ## Check code formatting
 	@uv run ruff format --check xbooster/ tests/
 	@echo "$(GREEN)✓ Format check passed$(NC)"
 
-typecheck: ## Run type checking with ty
+typecheck: ## Run type checking with mypy and ty
+	@echo "$(BLUE)Type checking with mypy...$(NC)"
+	@uv run mypy xbooster/ tests/
 	@echo "$(BLUE)Type checking with ty...$(NC)"
 	@uv run ty check
 	@echo "$(GREEN)✓ Type check passed$(NC)"
@@ -58,7 +60,8 @@ ci-check: ## Run all CI checks locally (fast, no Docker)
 	@uv run ruff format --check xbooster/ tests/
 	@echo "$(GREEN)✓$(NC) Format check passed"
 	@echo ""
-	@echo "$(BLUE)[3/4]$(NC) Type checking with ty..."
+	@echo "$(BLUE)[3/4]$(NC) Type checking with mypy and ty..."
+	@uv run mypy xbooster/ tests/
 	@uv run ty check
 	@echo "$(GREEN)✓$(NC) Type check passed"
 	@echo ""

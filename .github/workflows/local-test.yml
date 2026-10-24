@@ -40,6 +40,7 @@ jobs:
 
     - name: Run type check
       run: |
+        uv run mypy xbooster/ tests/ || echo "Type checking issues found"
         uv run ty check || echo "Type checking issues found"
 
     - name: Run quick tests (no full suite)

@@ -8,8 +8,8 @@ for extracting and processing scorecard data from CatBoost models.
 import numpy as np
 import pandas as pd
 import pytest
-from catboost import CatBoostClassifier, Pool  # type: ignore
-from sklearn.datasets import make_classification  # type: ignore
+from catboost import CatBoostClassifier, Pool
+from sklearn.datasets import make_classification
 
 from xbooster.catboost_scorecard import CatBoostScorecard
 

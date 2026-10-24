@@ -136,7 +136,7 @@ class CatBoostScorecard:
 
         # Extract feature names if available
         feature_names = CatBoostScorecard._extract_feature_names(pool)
-        CatBoostScorecard.debug_info["feature_names"] = feature_names  # type: ignore
+        CatBoostScorecard.debug_info["feature_names"] = feature_names
 
         # Reverse order to match CatBoost's native visualization
         CatBoostScorecard.level_conditions = {tree_idx: list(reversed(split_conditions))}

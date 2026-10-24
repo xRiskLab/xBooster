@@ -160,7 +160,7 @@ class XGBScorecardConstructor:
         output_conditions_df = pd.DataFrame.from_dict(
             output_conditions, orient="index", columns=["DetailedSplit"]
         ).reset_index()
-        output_conditions_df.columns = ["Key", "DetailedSplit"]  # type: ignore
+        output_conditions_df.columns = ["Key", "DetailedSplit"]
 
         # pylint: disable=E1136
         if dataframe is not None:
@@ -248,9 +248,6 @@ class XGBScorecardConstructor:
             )
             tree_df["TempSplit"] = np.where(
                 pd.notna(tree_df["Category"]), tree_df["Category"], tree_df["Split"]
-            )
-            tree_df["TempSplit"].apply(
-                lambda x: x.strip("[]'") if isinstance(x, str) and "[" in x and "]" in x else x
             )
             tree_df["Split"] = np.where(
                 pd.isna(tree_df["Split"]), tree_df["TempSplit"], tree_df["Split"]
@@ -492,23 +489,14 @@ class XGBScorecardConstructor:
         Options:
             - 'XAddEvidence': Uses XGBoost's log-odds score (leaf weight or margin).
             - 'WOE': Uses Weight-of-Evidence (WOE) score (Experimental).
-            - 'SHAP': Uses SHAP values aggregated per leaf (Alpha - for depth>1 models).
 
-        scorecard: pd.DataFrame, optional
-            An external scorecard to use for creating points, by default None.
-            This option allow to build points on an external scorecard, for example,
-            when we calculate the points for all splits leading to a leaf node.
+            For SHAP-based scoring, use predict_score(method='shap') instead.
 
         Experimental:
         -------------
         For WOE score type, individual WOE scores are adjusted by the learning rate
         and divided by the maximum number of nodes per tree to make them more
         similar to the range of XAddEvidence scores.
-
-        For SHAP score type (Alpha), SHAP values are aggregated per leaf using
-        weighted average. This is particularly useful for models with max_depth > 1
-        where interpretability becomes challenging. SHAP values provide feature
-        attribution that accounts for feature interactions.
 
         References:
         NVIDIA GTC Talk "Machine Learning in Retail Credit Risk" by Paul Edwards.
@@ -519,18 +507,6 @@ class XGBScorecardConstructor:
         https://wandb.ai/morgan/credit_scorecard/artifacts/dataset/vehicle_loan_defaults/v1.
         """
 
-        # Store the parameters as attributes of the class
-        if self.pdo is None:
-            self.pdo = pdo
-        if self.target_points is None:
-            self.target_points = target_points
-        if self.target_odds is None:
-            self.target_odds = target_odds
-        if self.precision_points is None:
-            self.precision_points = precision_points
-        if self.score_type is None:
-            self.score_type = score_type
-
         if score_type not in {"XAddEvidence", "WOE"}:
             raise ValueError(
                 "constructor.py: score must be one of 'XAddEvidence' or 'WOE'. "
@@ -540,12 +516,7 @@ class XGBScorecardConstructor:
             if self.xgb_scorecard is None:
                 raise ValueError("xgb_scorecard is None and dataframe is None.")
             # Get base score based on score_type
-            if score_type == "SHAP":
-                raise ValueError(
-                    "SHAP score_type is no longer supported in create_points(). "
-                    "Use predict_score(method='shap') instead."
-                )
-            elif score_type == "WOE":
+            if score_type == "WOE":
                 # For WOE, use average event rate
                 base_score = self.y.mean() / (1 - self.y.mean())
                 score_col = (
@@ -553,14 +524,10 @@ class XGBScorecardConstructor:
                     # TODO: Make adjustable in the future
                     / self.xgb_scorecard["Node"].max()
                 )
-            elif score_type == "XAddEvidence":
-                # For XAddEvidence, use model's base_score
-                base_score = self.base_score
-                score_col = self.xgb_scorecard.XAddEvidence
             else:
                 # For XAddEvidence, use model's base_score
                 base_score = self.base_score
-                raise ValueError(f"Unknown score_type: {score_type}")
+                score_col = self.xgb_scorecard.XAddEvidence
 
             scdf = (
                 self.xgb_scorecard.copy().assign(Score=score_col).assign(base_score=base_score)  # pylint: disable=E1101
@@ -598,6 +565,14 @@ class XGBScorecardConstructor:
             )
 
         self.xgb_scorecard_with_points.reset_index(inplace=True)
+
+        # Store the parameters only once the points table is built, so a failed
+        # call doesn't leave scaling that predict_score(method="shap") would use
+        self.pdo = pdo
+        self.target_points = target_points
+        self.target_odds = target_odds
+        self.precision_points = precision_points
+        self.score_type = score_type
 
         return self.xgb_scorecard_with_points
 
@@ -1016,7 +991,7 @@ class XGBScorecardConstructor:
             count = ((data[feat] >= left) & (data[feat] < right)).sum()
             if count_missing:
                 count += data[feat].isna().sum()
-            return count
+            return int(count)
 
         self.xgb_scorecard_intv["Count"] = np.nan
         self.xgb_scorecard_intv["Events"] = np.nan

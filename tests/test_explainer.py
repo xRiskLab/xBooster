@@ -9,6 +9,8 @@ and plot_local_importance, as well as the build_interactions_splits function.
 
 import unittest
 
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 import numpy as np
 import pandas as pd
 import pytest
@@ -130,6 +132,25 @@ class TestExplainer(unittest.TestCase):
         with self.assertRaises(ValueError):
             plot_score_distribution()  # Should raise ValueError
         plot_score_distribution(y_true=self.y_true, y_pred=self.y_pred)
+
+        # A single-column DataFrame of labels is accepted, wider frames are rejected
+        plot_score_distribution(y_true=self.y_true.to_frame(), y_pred=self.y_pred)
+        with self.assertRaises(ValueError):
+            plot_score_distribution(
+                y_true=pd.concat([self.y_true, self.y_true], axis=1), y_pred=self.y_pred
+            )
+
+        # Labels and scores from a test split share a non-default index; every
+        # observation must still land in one of the two histograms
+        shifted_index = self.y_true.index + 1000
+        plot_score_distribution(
+            y_true=self.y_true.set_axis(shifted_index),
+            y_pred=self.y_pred.set_axis(shifted_index),
+        )
+        plotted = sum(
+            patch.get_height() for patch in plt.gca().patches if isinstance(patch, Rectangle)
+        )
+        assert plotted == len(self.y_true)
 
     @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_plot_local_importance(self):

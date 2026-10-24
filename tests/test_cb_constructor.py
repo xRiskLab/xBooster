@@ -184,7 +184,7 @@ def credit_data():
     features = num_features
 
     X = credit_data[features]
-    y = credit_data["Final_Decision"].replace({"Accept": 1, "Decline": 0})
+    y = credit_data["Final_Decision"].map({"Accept": 1, "Decline": 0})
     return X, y
 
 
@@ -278,8 +278,8 @@ def test_construct_scorecard(scorecard_constructor):
     # Check data types
     assert scorecard["Tree"].dtype == np.int64
     assert scorecard["LeafIndex"].dtype == np.int64
-    assert scorecard["Feature"].dtype == object
-    assert scorecard["Sign"].dtype == object
+    assert pd.api.types.is_string_dtype(scorecard["Feature"])
+    assert pd.api.types.is_string_dtype(scorecard["Sign"])
     assert scorecard["Split"].dtype == object  # Can be float or string
     assert scorecard["Count"].dtype == np.float64
     assert scorecard["NonEvents"].dtype == np.float64
@@ -288,7 +288,7 @@ def test_construct_scorecard(scorecard_constructor):
     assert scorecard["WOE"].dtype == np.float64
     assert scorecard["IV"].dtype == np.float64
     assert scorecard["CountPct"].dtype == np.float64
-    assert scorecard["DetailedSplit"].dtype == object
+    assert pd.api.types.is_string_dtype(scorecard["DetailedSplit"])
     assert scorecard["XAddEvidence"].dtype == np.float64
 
     # Check for valid values
@@ -665,7 +665,7 @@ def test_feature_importance_and_multiple_create_points(credit_data, credit_model
         np.testing.assert_allclose(raw_scores_after2, cb_preds, rtol=1e-2, atol=1e-2)
 
     except Exception as e:
-        pytest.fail(f"create_points failed when called a second time: {str(e)}")
+        pytest.fail(f"create_points failed when called a second time: {str(e)}")  # ty: ignore[invalid-argument-type]
 
     # Calculate Gini coefficients to verify that the predictive power is maintained
     cb_gini = 2 * roc_auc_score(y, cb_preds) - 1
@@ -689,7 +689,7 @@ def test_pdo_scoring_produces_varied_scores():
     features = num_features + categorical_features
 
     X = credit_data[features]
-    y = credit_data["Final_Decision"].replace({"Accept": 1, "Decline": 0})
+    y = credit_data["Final_Decision"].map({"Accept": 1, "Decline": 0})
 
     # Create pool and model
     pool = Pool(

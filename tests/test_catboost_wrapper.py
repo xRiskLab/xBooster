@@ -168,8 +168,8 @@ def test_get_binned_feature_table(woe_mapper):
     required_columns = {"Feature", "Condition", "XAddEvidence", "Weight", "TreeCount"}
     assert set(table.columns) >= required_columns
 
-    assert table["Feature"].dtype == object
-    assert table["Condition"].dtype == object
+    assert pd.api.types.is_string_dtype(table["Feature"])
+    assert pd.api.types.is_string_dtype(table["Condition"])
     assert table["XAddEvidence"].dtype == np.float64
     assert table["Weight"].dtype == np.float64
     assert table["TreeCount"].dtype == np.int64

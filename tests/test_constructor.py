@@ -48,6 +48,5 @@ def test_constructor_all():
 
     assert CatBoostScorecardConstructor is CBScorecardConstructor
     assert "CatBoostScorecardConstructor" in __all__
-    assert (
-        len(__all__) == 3
-    )  # XGBScorecardConstructor, CBScorecardConstructor, CatBoostScorecardConstructor
+    assert "LGBScorecardConstructor" in __all__
+    assert len(__all__) == 4  # XGB, LGB, CB, and the CatBoostScorecardConstructor alias

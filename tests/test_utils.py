@@ -4,6 +4,8 @@ Description: This file contains the unit tests for the utility functions in the 
 """
 
 import pandas as pd
+import pytest
+
 from xbooster import _utils  # pylint: disable=E0401
 
 # Sample data for testing
@@ -135,3 +137,28 @@ def test_calculate_likelihood():
     assert all(isinstance(val, (int, float)) for val in likelihood), (
         "Likelihood values are not numeric"
     )
+
+
+def test_catboost_preprocessor_category_limits():
+    """
+    Test that CatBoostPreprocessor honours max_categories, falls back to top_p=0.9,
+    and rejects setting both.
+    """
+    # Cumulative frequencies: a=0.50, b=0.80, c=0.95, d=1.00
+    X = pd.DataFrame({"cat": ["a"] * 50 + ["b"] * 30 + ["c"] * 15 + ["d"] * 5})  # pylint: disable=C0103
+
+    by_count = _utils.CatBoostPreprocessor(max_categories=3).fit(X)
+    assert by_count.get_mapping()["cat"] == {"a", "b", "c"}
+
+    by_default = _utils.CatBoostPreprocessor().fit(X)
+    assert by_default.get_mapping()["cat"] == {"a", "b"}
+
+    transformed = by_count.transform(X)
+    assert set(transformed["cat"]) == {"a", "b", "c", "__other__"}
+
+    with pytest.raises(ValueError):
+        _utils.CatBoostPreprocessor(max_categories=3, top_p=0.9)
+
+    # set_params() bypasses __init__, so fit() must reject both limits as well
+    with pytest.raises(ValueError):
+        _utils.CatBoostPreprocessor(max_categories=3).set_params(top_p=0.9).fit(X)

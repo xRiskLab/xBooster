@@ -174,7 +174,11 @@ class CatBoostWOEMapper:
 
             # Normalize to get relative importance
             total = feature_woe_sum.sum()
-            importance = (feature_woe_sum / total).to_dict() if total > 0 else {}
+            importance = (
+                {str(k): float(v) for k, v in (feature_woe_sum / total).items()}
+                if total > 0
+                else {}
+            )
 
             self.feature_importance = importance
             return importance
@@ -644,12 +648,10 @@ class CatBoostWOEMapper:
 
             # For unassigned rows, use the default leaf (most common)
             if np.any(unassigned) and not tree_data.empty:
-                default_idx = (
-                    tree_data["Count"].idxmax()
-                    if "Count" in tree_data.columns
-                    else tree_data.index[0]
+                default_pos = (
+                    int(tree_data["Count"].argmax()) if "Count" in tree_data.columns else 0
                 )
-                default_leaf = tree_data.loc[default_idx]
+                default_leaf = tree_data.iloc[default_pos]
                 default_value: Any = default_leaf[value_col]
                 if method == "raw":
                     # No normalization for raw method
@@ -737,12 +739,10 @@ class CatBoostWOEMapper:
 
             # If no leaf matched, use the default (most common) leaf
             if not assigned and not tree_data.empty:
-                default_idx = (
-                    tree_data["Count"].idxmax()
-                    if "Count" in tree_data.columns
-                    else tree_data.index[0]
+                default_pos = (
+                    int(tree_data["Count"].argmax()) if "Count" in tree_data.columns else 0
                 )
-                default_value: Any = tree_data.loc[default_idx][value_col]
+                default_value: Any = tree_data.iloc[default_pos][value_col]
                 if method == "raw":
                     # No normalization for raw method
                     pass

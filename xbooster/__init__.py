@@ -2,7 +2,7 @@
 xbooster - Explainable Boosted Scoring
 
 A Python package for building and deploying interpretable credit scorecards
-from gradient boosted tree models (XGBoost and CatBoost).
+from gradient boosted tree models (XGBoost, LightGBM, and CatBoost).
 """
 
 from . import finetuner as finetuner
