@@ -990,7 +990,7 @@ class XGBScorecardConstructor:
             count = ((data[feat] >= left) & (data[feat] < right)).sum()
             if count_missing:
                 count += data[feat].isna().sum()
-            return count
+            return int(count)
 
         self.xgb_scorecard_intv["Count"] = np.nan
         self.xgb_scorecard_intv["Events"] = np.nan
