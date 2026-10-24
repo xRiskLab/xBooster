@@ -140,8 +140,8 @@ def test_extract_leaf_weights(trained_lgb_model, sample_data):
 
     # Check data types
     assert leaf_weights["Tree"].dtype in [np.int64, np.int32]
-    assert leaf_weights["Feature"].dtype == object
-    assert leaf_weights["Sign"].dtype == object
+    assert pd.api.types.is_string_dtype(leaf_weights["Feature"])
+    assert pd.api.types.is_string_dtype(leaf_weights["Sign"])
     assert leaf_weights["Split"].dtype in [np.float64, np.float32]
     assert leaf_weights["XAddEvidence"].dtype in [np.float64, np.float32]
 

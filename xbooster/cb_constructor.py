@@ -232,6 +232,9 @@ class CBScorecardConstructor:
         assert self.scorecard_df is not None
 
         scorecard = self.scorecard_df.copy()
+        # Split mixes numeric thresholds and category strings; pandas 3 would
+        # otherwise infer a str dtype that rejects the float assignments below
+        scorecard["Split"] = scorecard["Split"].astype(object)
 
         # Extract feature names and split values from DetailedSplit
         for idx, row in scorecard.iterrows():

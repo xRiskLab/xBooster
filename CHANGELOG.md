@@ -25,6 +25,9 @@
 - `CatBoostPreprocessor(max_categories=N)` silently ignored `max_categories` because `top_p`
   defaulted to 0.9 and took precedence. `top_p` now defaults to `None`; `max_categories` is used
   when set, `top_p=0.9` is the fallback when neither is set, and setting both raises `ValueError`
+- pandas 3 compatibility: `CBScorecardConstructor.construct_scorecard()` failed with `TypeError`
+  because pandas 3 inferred `Split` as `str` and rejected float thresholds; `Split` is now `object`.
+  Also typed `CatBoostWOEMapper` feature importance and default-leaf lookups for pandas-stubs 3
 - `CatBoostPreprocessor.fit_transform()` signature is now compatible with scikit-learn's
   `TransformerMixin`
 - `scipy.special` stubs accept array-likes (pandas Series), matching scipy's real signature
