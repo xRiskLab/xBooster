@@ -131,6 +131,13 @@ class TestExplainer(unittest.TestCase):
             plot_score_distribution()  # Should raise ValueError
         plot_score_distribution(y_true=self.y_true, y_pred=self.y_pred)
 
+        # A single-column DataFrame of labels is accepted, wider frames are rejected
+        plot_score_distribution(y_true=self.y_true.to_frame(), y_pred=self.y_pred)
+        with self.assertRaises(ValueError):
+            plot_score_distribution(
+                y_true=pd.concat([self.y_true, self.y_true], axis=1), y_pred=self.y_pred
+            )
+
     @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_plot_local_importance(self):
         """

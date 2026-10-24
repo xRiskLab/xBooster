@@ -1,5 +1,35 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Python 3.11–3.14 support**: `requires-python` is now `>=3.10` (previously capped at `<3.11`)
+  - NumPy 2.x allowed (`numpy>=1.26.0,<3.0.0`)
+  - pandas 3.x allowed (`pandas>=2.2.2,<4.0.0`)
+  - pyarrow upper bound removed; Python 3.14 requires `pyarrow>=22` and `scipy>=1.16.1`
+  - CI matrix extended to Python 3.12, 3.13, and 3.14
+- `LGBScorecardConstructor` is now re-exported from `xbooster.constructor`
+- **ty type checking alongside mypy**: `ty` (pinned, pre-1.0) runs in `make typecheck`, CI, and
+  pre-commit, configured to use the stubs in `typings/`
+- mypy now runs with `warn_unused_ignores = true`
+
+### Fixed
+- `XGBScorecardConstructor.create_points()` now updates `pdo`, `target_points`, `target_odds`,
+  `precision_points`, and `score_type` on every call; previously only the first call's values
+  were stored, so `predict_score(method="shap")` used stale scaling after re-calling `create_points()`
+- Removed a no-op categorical split cleanup in `extract_leaf_weights()` and unreachable branches
+  in `create_points()`
+- `make typecheck` / `make ci-check` now run mypy and ty (previously called `ty` without it installed)
+- `explainer.plot_score_distribution()` crashed with `AttributeError` when `y_true` was a DataFrame;
+  it now accepts a single-column DataFrame and rejects wider ones with a clear `ValueError`
+- `CatBoostPreprocessor(max_categories=N)` silently ignored `max_categories` because `top_p`
+  defaulted to 0.9 and took precedence. `top_p` now defaults to `None`; `max_categories` is used
+  when set, `top_p=0.9` is the fallback when neither is set, and setting both raises `ValueError`
+- `CatBoostPreprocessor.fit_transform()` signature is now compatible with scikit-learn's
+  `TransformerMixin`
+- `scipy.special` stubs accept array-likes (pandas Series), matching scipy's real signature
+- Removed 15 `# type: ignore` comments that neither mypy nor ty needed
+
 ## [0.2.8] - 2026-04-19
 
 ### Added

@@ -2,7 +2,7 @@
 constructor.py
 
 Unified interface for importing scorecard constructors.
-This module provides access to both XGBoost and CatBoost scorecard constructors.
+This module provides access to the XGBoost, LightGBM, and CatBoost scorecard constructors.
 
 Authors: Denis Burakov
 Github: @deburky
@@ -16,6 +16,7 @@ from typing import Any, Dict, Optional, Protocol, Union
 import pandas as pd
 
 from xbooster.cb_constructor import CBScorecardConstructor
+from xbooster.lgb_constructor import LGBScorecardConstructor
 from xbooster.xgb_constructor import XGBScorecardConstructor
 
 # Backward compatibility alias
@@ -41,4 +42,9 @@ class ScorecardConstructor(Protocol):
     def generate_sql_query(self, table_name: str = "my_table") -> str: ...
 
 
-__all__ = ["XGBScorecardConstructor", "CBScorecardConstructor", "CatBoostScorecardConstructor"]
+__all__ = [
+    "XGBScorecardConstructor",
+    "LGBScorecardConstructor",
+    "CBScorecardConstructor",
+    "CatBoostScorecardConstructor",
+]

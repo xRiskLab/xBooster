@@ -527,7 +527,7 @@ class LGBScorecardConstructor:  # pylint: disable=R0902
 
         # Calculate points with negative sign to invert (higher logit = lower score = lower risk)
         # This matches XGBoost's formula: -ScaledScore + var_offsets - shft_base_pts
-        shift_sc = -scdf["ScaledScore"] + scdf.index.map(var_offsets) - shft_base_pts
+        shift_sc = -scdf["ScaledScore"] + scdf.index.map(var_offsets.to_dict()) - shft_base_pts
         scdf["Points"] = shift_sc.round(precision_points)
 
         # Reset index

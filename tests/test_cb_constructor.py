@@ -665,7 +665,7 @@ def test_feature_importance_and_multiple_create_points(credit_data, credit_model
         np.testing.assert_allclose(raw_scores_after2, cb_preds, rtol=1e-2, atol=1e-2)
 
     except Exception as e:
-        pytest.fail(f"create_points failed when called a second time: {str(e)}")
+        pytest.fail(f"create_points failed when called a second time: {str(e)}")  # ty: ignore[invalid-argument-type]
 
     # Calculate Gini coefficients to verify that the predictive power is maintained
     cb_gini = 2 * roc_auc_score(y, cb_preds) - 1

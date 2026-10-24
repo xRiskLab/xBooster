@@ -67,10 +67,10 @@ class DataPreprocessor:
         )
         new_columns = self.ohe_transformer.get_feature_names_out()
         # Type ignore because scikit-learn's transform returns Union[np.ndarray, spmatrix]
-        X = pd.DataFrame(X_transformed, columns=new_columns)  # type: ignore
+        X = pd.DataFrame(X_transformed, columns=new_columns)
         y = pd.Series(
             # Type ignore because LabelBinarizer.transform returns Union[np.ndarray, spmatrix]
-            self.label_binarizer.transform(dataset[self.target]).ravel(),  # type: ignore
+            self.label_binarizer.transform(dataset[self.target]).ravel(),
             name=self.target,
         )
         return X, y
@@ -323,13 +323,15 @@ def convert_to_sql(xgb_scorecard: pd.DataFrame, my_table: str) -> str:  # pylint
 class CatBoostPreprocessor(BaseEstimator, TransformerMixin):
     """
     Preprocess high-cardinality categorical features for interpretable CatBoost models.
-    You can control either:
+    You can control either (not both):
       - max_categories (top N by frequency)
       - top_p (top N% cumulative frequency)
+    If neither is set, top_p=0.9 is used.
     """
 
-    def __init__(self, max_categories=None, top_p=0.9, other_token="__other__"):
-        assert max_categories or top_p, "Set either `max_categories` or `top_p`"
+    def __init__(self, max_categories=None, top_p=None, other_token="__other__"):
+        if max_categories is not None and top_p is not None:
+            raise ValueError("Set either `max_categories` or `top_p`, not both")
         self.max_categories = max_categories
         self.top_p = top_p
         self.other_token = other_token
@@ -342,11 +344,12 @@ class CatBoostPreprocessor(BaseEstimator, TransformerMixin):
 
         for col in self.cat_features_:
             vc = X[col].astype(str).value_counts(dropna=False).sort_values(ascending=False)
-            if self.top_p is not None:
-                cumulative = vc.cumsum() / vc.sum()
-                top_cats = cumulative[cumulative <= self.top_p].index.tolist()
-            else:
+            if self.max_categories is not None:
                 top_cats = vc.nlargest(self.max_categories).index.tolist()
+            else:
+                top_p = 0.9 if self.top_p is None else self.top_p
+                cumulative = vc.cumsum() / vc.sum()
+                top_cats = cumulative[cumulative <= top_p].index.tolist()
 
             self.category_maps[col] = set(top_cats)
 
@@ -366,7 +369,7 @@ class CatBoostPreprocessor(BaseEstimator, TransformerMixin):
 
     # pylint: disable=arguments-differ
     def fit_transform(
-        self, X: pd.DataFrame, y=None, cat_features: Optional[list[str]] = None
+        self, X: pd.DataFrame, y=None, cat_features: Optional[list[str]] = None, **fit_params
     ) -> pd.DataFrame:
         """Fit the preprocessor and transform the data."""
         return self.fit(X, y, cat_features).transform(X)

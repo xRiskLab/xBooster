@@ -82,7 +82,7 @@ def build_interactions_splits(  # pylint: disable=R0914
     else:
         raise ValueError("Either 'scorecard_constructor' or 'dataframe' must be provided.")
 
-    for _, row in xgb_scorecard_with_splits.iterrows():  # type: ignore
+    for _, row in xgb_scorecard_with_splits.iterrows():
         tree = row["Tree"]
         node = row["Node"]
         features = str(row["DetailedSplit"])
@@ -216,13 +216,12 @@ def split_and_count(  # pylint: disable=R0914
                 index=[0],
             )
         )
-    # type: ignore
     split_and_count_data = pd.concat(split_and_count_data, ignore_index=True)
     # Create columns so that in split creation we don't run into incorrect sums
     if dataframe is not None:
         split_and_count_data["CumEvents"] = dataframe.iloc[::, -1].sum()
         split_and_count_data["CumNonEvents"] = len(dataframe) - split_and_count_data["CumEvents"]
-    split_and_count_data = calculate_information_value(split_and_count_data)  # type: ignore
+    split_and_count_data = calculate_information_value(split_and_count_data)
     # Calculate the likelihood ratio given the WOE and WoeLeaf
     split_and_count_data["LikelihoodRatio"] = np.exp(
         split_and_count_data["WoeLeaf"] - split_and_count_data["WOE"]
@@ -341,7 +340,7 @@ def plot_importance(
 
     with plt.rc_context({"font.family": fontfamily, "font.size": fontsize}):
         _, ax = plt.subplots(dpi=dpi, **kwargs)
-        importance_data.plot(kind="barh", width=0.75, ax=ax, fontsize=12, color=color, **kwargs)  # type: ignore
+        importance_data.plot(kind="barh", width=0.75, ax=ax, fontsize=12, color=color, **kwargs)
 
         ax.set_ylabel(None)
         ax.set_xlabel(
@@ -359,7 +358,7 @@ def plot_importance(
 
 
 def plot_score_distribution(
-    y_true: Optional[pd.Series] = None,
+    y_true: Optional[Union[pd.Series, pd.DataFrame]] = None,
     y_pred: Optional[pd.Series] = None,
     n_bins: int = 25,
     scorecard_constructor: Optional[XGBScorecardConstructor] = None,
@@ -386,11 +385,13 @@ def plot_score_distribution(
         if scorecard_constructor is None:
             raise ValueError("if y_true and y_pred are not provided, use scorecard_constructor.")
         y_true = scorecard_constructor.y
-        y_pred = scorecard_constructor.predict_score(scorecard_constructor.X)  # type: ignore
+        y_pred = scorecard_constructor.predict_score(scorecard_constructor.X)
 
     assert y_true is not None and y_pred is not None
-    if isinstance(y_true, pd.DataFrame) and y_true.shape[1].shape is None:
-        raise ValueError("Must have two classes.")
+    if isinstance(y_true, pd.DataFrame):
+        if y_true.shape[1] != 1:
+            raise ValueError("y_true must have a single label column.")
+        y_true = y_true.iloc[:, 0]
 
     if len(np.unique(y_true)) != 2:
         raise ValueError("This function is only for binary classification tasks.")
@@ -544,7 +545,7 @@ def plot_local_importance(
     max_abs_woe += extra_space
 
     with plt.rc_context({"font.family": fontfamily, "font.size": fontsize}):
-        _, ax = plt.subplots(**kwargs)  # type: ignore
+        _, ax = plt.subplots(**kwargs)
         ax.invert_yaxis()
         bars = ax.barh(labels, summary_plot_filled["WOE"], color=colors)
         adjust = 0.03
@@ -559,7 +560,7 @@ def plot_local_importance(
                 color="black",
             )
         for patch in ax.patches:
-            bb = patch.get_bbox()  # type: ignore
+            bb = patch.get_bbox()
             color = patch.get_facecolor()
             p_bbox = FancyBboxPatch(
                 (bb.xmin, bb.ymin),
@@ -765,7 +766,7 @@ class TreeVisualizer:
                 (
                     f"The following metrics are not found in the scorecard\n "
                     f"dataframe: {', '.join(missing_metrics)}. Allowed metrics are: \n"
-                    f"{', '.join(self.scorecard_frame.columns)}"  # type: ignore
+                    f"{', '.join(self.scorecard_frame.columns)}"
                 )
             )
         return {
@@ -929,7 +930,7 @@ class TreeVisualizer:
                 self._draw_tree(
                     child,
                     depth + 1,
-                    child_pos_x,  # type: ignore
+                    child_pos_x,
                     level_distance,
                     sibling_distance / children_count,
                     leaf_distance,

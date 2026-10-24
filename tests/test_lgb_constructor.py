@@ -81,13 +81,13 @@ def test_lgb_constructor_methods_raise_not_implemented(trained_lgb_model, sample
         assert len(leaf_weights) > 0
         assert "XAddEvidence" in leaf_weights.columns
     except NotImplementedError:
-        pytest.fail("extract_leaf_weights should be implemented")
+        pytest.fail("extract_leaf_weights should be implemented")  # ty: ignore[invalid-argument-type]
 
     try:
         leaf_indices = constructor.get_leafs(X, output_type="leaf_index")
         assert leaf_indices.shape[0] == len(X)
     except NotImplementedError:
-        pytest.fail("get_leafs should be implemented")
+        pytest.fail("get_leafs should be implemented")  # ty: ignore[invalid-argument-type]
 
     # Test construct_scorecard, create_points, and predict_score
     try:
@@ -95,20 +95,20 @@ def test_lgb_constructor_methods_raise_not_implemented(trained_lgb_model, sample
         assert len(scorecard) > 0
         assert "XAddEvidence" in scorecard.columns
     except NotImplementedError:
-        pytest.fail("construct_scorecard should be implemented")
+        pytest.fail("construct_scorecard should be implemented")  # ty: ignore[invalid-argument-type]
 
     try:
         scorecard_with_points = constructor.create_points()
         assert len(scorecard_with_points) > 0
         assert "Points" in scorecard_with_points.columns
     except NotImplementedError:
-        pytest.fail("create_points should be implemented")
+        pytest.fail("create_points should be implemented")  # ty: ignore[invalid-argument-type]
 
     try:
         scores = constructor.predict_score(X)
         assert len(scores) == len(X)
     except NotImplementedError:
-        pytest.fail("predict_score should be implemented")
+        pytest.fail("predict_score should be implemented")  # ty: ignore[invalid-argument-type]
 
 
 def test_lgb_constructor_model_type(trained_lgb_model, sample_data):
